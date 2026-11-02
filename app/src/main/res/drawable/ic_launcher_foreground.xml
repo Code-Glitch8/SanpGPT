@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Four-point "spark" inside the adaptive-icon safe zone. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,28 L60.5,47.5 L80,54 L60.5,60.5 L54,80 L47.5,60.5 L28,54 L47.5,47.5 Z" />
+    <path
+        android:fillColor="#C7D2FE"
+        android:pathData="M79,26 L81,32 L87,34 L81,36 L79,42 L77,36 L71,34 L77,32 Z" />
+</vector>

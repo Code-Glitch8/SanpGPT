@@ -1,0 +1,30 @@
+# Gradle / build output
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Android Studio / IDEs
+.idea/
+*.iml
+local.properties
+.DS_Store
+
+# Signing material and secrets: NEVER commit these
+*.jks
+*.keystore
+*.p12
+keystore.properties
+signing.properties
+secrets.properties
+.env
+.env.*
+google-services.json
+
+# Logs / misc
+*.log
+*.apk
+*.aab
+*.hprof

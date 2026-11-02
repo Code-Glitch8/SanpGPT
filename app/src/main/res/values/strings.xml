@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SnapGPT</string>
+    <string name="notif_channel_name">SnapGPT assistant</string>
+    <string name="notif_channel_desc">Shown while the floating assistant is active. Screen capture only happens when you tap Scan.</string>
+    <string name="notif_title">SnapGPT assistant is active</string>
+    <string name="notif_text">Screen is captured only when you tap Scan.</string>
+    <string name="notif_action_stop">Stop</string>
+    <string name="notif_action_hide">Hide circle</string>
+    <string name="notif_action_show">Show circle</string>
+    <string name="menu_scan_full">Scan entire screen</string>
+    <string name="menu_select_area">Select question area</string>
+    <string name="menu_clear_answers">Clear answers</string>
+    <string name="menu_hide">Hide assistant</string>
+    <string name="menu_settings">Settings</string>
+</resources>

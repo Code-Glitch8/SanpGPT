@@ -1,5 +1,0 @@
-<resources>
-    <string name="app_name">SnapGPT</string>
-    <string name="capture_notification">SnapGPT is capturing a screen you selected</string>
-    <string name="assistant_notification">SnapGPT floating assistant is active</string>
-</resources>

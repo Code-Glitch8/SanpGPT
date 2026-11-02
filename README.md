@@ -1,161 +1,147 @@
 # SnapGPT Android
 
-A native Kotlin/Jetpack Compose Android study assistant. A user-started floating control can request a screen capture, send the selected screenshot to Groq's Qwen vision model for concise JEE-oriented answers, then request a detailed explanation only when an answer bubble is tapped.
+Native AI floating screen assistant for JEE Main / JEE Advanced students. A small draggable circle floats over other apps; tap it to scan the screen (or a selected area), get **concise answers** next to every detected question, then tap an answer for a **detailed JEE-level explanation**.
 
-> **Study-use note:** SnapGPT is intended for practice, revision and learning. Follow your school, coaching centre and examination rules. Do not use it to get unauthorized assistance during tests or examinations.
+Kotlin · Jetpack Compose (Material 3) · WindowManager overlays · MediaProjection · Foreground Service · Coroutines · DataStore · Room · Android Keystore · Groq API. Not a WebView app.
 
-## Current implementation
+> **Honest build status** — read this first
+> - The pure logic (Groq client, Stage 1 JSON validation, prompts, coordinate mapping, answer placement, token accounting) is covered by 41 unit tests that were compiled and run with a standalone Kotlin compiler, including HTTP tests against a local mock of Groq's API.
+> - The Android layers (Compose UI, overlay windows, MediaProjection capture, Room, Keystore, foreground service) and the Gradle/AGP build **have not been compiled or run** by the author: the authoring environment had no Android SDK and could not reach Maven/Google/Gradle servers.
+> - **No APK has been built and none is included.** The GitHub Actions workflow has been validated for structure only; a live run is still pending. The first run on GitHub may reveal compile errors to fix; see [Troubleshooting](#troubleshooting).
+> - No live Groq request and no on-device test (overlay, capture, permissions, rotation) has been performed. Treat everything on-device as untested until you try it.
 
-- Native Android app built with Kotlin and Jetpack Compose (not a WebView).
-- Draggable floating `S` assistant with idle transparency and a tap menu.
-- Explicit Android MediaProjection permission for each scan session.
-- Full-display scan and screenshot-preview region selection.
-- Groq vision request using `qwen/qwen3.8-27b`.
-- Stage 1: concise structured question/answer detection.
-- Stage 2: detailed JEE-focused explanation only after an answer bubble is tapped.
-- Follow-up questions in the explanation panel.
-- Bounding-box-based answer bubble placement.
-- JEE Main, JEE Advanced and Automatic prompt modes; syllabus restriction is enabled by default.
-- Android Keystore encryption for the API key at rest.
-- Local Room history and local token counters.
-- GitHub Actions workflow that runs unit tests and builds an APK artifact.
+## Features
+- Floating 52 dp circle (size/opacity configurable), drag anywhere, 100 % opacity + slight scale while touched, fades to ~30 % when idle, edge snapping, remembered position (survives rotation), keeps clear of system bars.
+- Compact menu: **Scan entire screen**, **Select question area**, **Hide assistant**, **Settings** (plus **Clear answers** when answers are showing).
+- Screen capture with Android's MediaProjection consent. Full-screen scan, or dim-and-drag area selection with live pixel size, Confirm / Cancel; only the selected region is sent.
+- **Two-stage AI**
+  - *Stage 1*: one image request -> structured JSON (question text, subject/chapter/topic, type, options, concise answer, confidence, normalised bounding box). No explanations.
+  - *Stage 2*: only when you tap an answer bubble -> detailed explanation of that single question (optionally with a small crop of it), then follow-ups, copy and regenerate.
+- Answer bubbles placed beside each question from normalised boxes, never covering question text, no overlaps, round for "B"/"42", pill for "9.8 m/s²", dismiss one or clear all.
+- JEE modes: Automatic / JEE Main / JEE Advanced, syllabus restriction (default on), chapter/topic display (on), alternative methods (off). Used in both stages.
+- Token saving and tracking (actual vs estimated), history with thumbnails, Settings, Light/Dark/System theme.
 
-## Important platform limitations
+## Requirements
+- Android 8.0+ (API 26). Compiles against SDK 35 (Android 15).
+- A Groq API key: <https://console.groq.com/keys>
+- To build locally: JDK 17 and Android SDK 35 (Android Studio Ladybug or newer is easiest).
 
-1. Android requires explicit user consent for MediaProjection. On Android 14 and later, obtain a fresh consent result for each new projection session and use each projection instance for only one `createVirtualDisplay` call. SnapGPT requests consent for each scan.
-2. Some apps mark their content secure (`FLAG_SECURE`). Android can block capture of those windows; SnapGPT does not bypass that restriction.
-3. In selected-area mode, SnapGPT first captures the user-authorized display and then opens a preview where the user draws a crop rectangle. The crop is mapped back to the original screenshot coordinates for bubble placement.
-4. Vision-model bounding boxes are approximate. Bubble placement is best-effort and may need manual repositioning on unusual layouts.
-5. Full-screen image capture depends on the device/OEM display implementation and can be stopped by Android or the device vendor.
-6. The API key is encrypted locally with Android Keystore. Because requests are made directly from the phone, a key used by a client application is not a true server-side secret. For public distribution, move Groq calls behind a secure backend proxy and apply per-user controls.
-7. Model availability, quotas and rate limits are controlled by Groq and can change. The app displays API errors rather than claiming a fixed quota.
-8. Screenshot files are kept in the app cache for the current scan/explanation session. The Room history stores question/answer metadata and a temporary screenshot path; Android may clear cached files later.
+## Repository structure
+```
+SnapGPT-Android/
+├── .github/workflows/build-android.yml     # tests + debug APK artifact
+├── .github/workflows/release-android.yml   # optional signed release (manual)
+├── app/src/main/java/com/snapgpt/
+│   ├── MainActivity.kt, SnapGptApp.kt      # entry, manual DI container
+│   ├── ui/        Compose screens, theme, view models
+│   ├── overlay/   floating circle, menu, selection, answer bubbles, explanation panel, placement maths
+│   ├── capture/   MediaProjection capture, consent activity, JPEG encoding, image sizing
+│   ├── ai/        Groq client, prompts, Stage 1 parser, AiService, usage accounting
+│   ├── jee/       exam modes and JEE instruction builder
+│   ├── history/   session models, history repository
+│   ├── settings/  DataStore settings, Keystore key storage, usage store
+│   ├── database/  Room entities and DAO
+│   └── services/  foreground OverlayService, ScanCoordinator, notification
+├── app/src/test/  unit tests
+├── gradle/wrapper/ gradlew gradlew.bat
+└── build.gradle.kts settings.gradle.kts gradle/libs.versions.toml
+```
 
-## Groq setup
+## Install (use the app)
+1. Install the APK (see below) and open **SnapGPT**.
+2. **Settings > AI**: paste your Groq key, *Save key*, then *Test connection* (should say Connected).
+3. Home > **Start assistant**. Grant, when asked:
+   - *Draw over other apps* (system settings page opens; switch SnapGPT on, return, press Start again).
+   - *Notifications* (Android 13+; optional, shows a Stop button).
+   - *Screen capture*: in Android's dialog choose to share the **entire screen** (on Android 14+ SnapGPT requests entire-screen only).
+4. The circle appears. Tap it -> **Scan entire screen** or **Select question area**.
+5. Answers appear beside the questions. Tap one for the explanation panel (drag the header to move, – to collapse, type a follow-up, Copy answer / Copy steps / Regenerate, ✕ to close).
+6. Stop any time with the notification's **Stop** button or **Stop assistant** in the app.
 
-1. Create an API key in the Groq Console: <https://console.groq.com/keys>.
-2. Install SnapGPT and open **Settings**.
-3. Paste the key and press **Save key**.
-4. Press **Test Groq connection**.
-5. The default model is `qwen/qwen3.8-27b`.
+## Groq API setup
+- Endpoint: `https://api.groq.com/openai/v1/chat/completions`. Default model: `qwen/qwen3.8-27b`.
+- Checked against <https://console.groq.com/docs/vision>: this model accepts image input and JSON mode, up to 3 images per request, about 2,048 input tokens per image, 20 MB request limit. Model availability changes; SnapGPT **never switches models silently** and shows a clear error if the model is unavailable. You can type another vision-capable model id in Settings.
+- Requests send images as base64 JPEG data URLs, `response_format: json_object` for Stage 1, `reasoning_format: hidden`, a completion budget that leaves room for reasoning, 15 s connect / 120 s read timeouts. HTTP 429 is never retried automatically; SnapGPT waits for `retry-after`.
+- **Key security:** the key is AES-GCM encrypted with an Android Keystore key and never written to logs. A key inside any mobile app can still be extracted by someone controlling the device or process. Use a dedicated key you can revoke. For a public release, put a backend proxy in front of Groq: construct `GroqClient(baseUrl = "https://your-proxy/openai/v1")` in `SnapGptApp.kt` and move the key to the server.
 
-SnapGPT uses the OpenAI-compatible Groq endpoint:
+## Required permissions
+| Permission | Why |
+|---|---|
+| `INTERNET` | Call Groq. |
+| `SYSTEM_ALERT_WINDOW` | Draw the circle, menu and answer bubbles over other apps. |
+| `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PROJECTION` | Required foreground service of type mediaProjection. |
+| `POST_NOTIFICATIONS` | Show the mandatory notification (Android 13+). |
+| MediaProjection consent | Asked by Android itself; nothing can be captured without it. |
 
-- Base URL: `https://api.groq.com/openai/v1`
-- Chat completions: `https://api.groq.com/openai/v1/chat/completions`
-- Vision documentation: <https://console.groq.com/docs/vision>
-- Models: <https://console.groq.com/docs/models>
+## JEE modes
+- **Automatic**: judges difficulty per question, reports `exam_level`, never claims to know the exact exam or year unless visible.
+- **JEE Main**: efficient standard methods, option elimination, numerical shortcuts.
+- **JEE Advanced**: deeper multi-concept reasoning, still inside the Advanced syllabus, watches for multiple-correct / integer types.
+- **Syllabus restriction** (on by default): instructs the model to use only official NTA JEE Main / JEE Advanced syllabus methods, prefer the simplest valid JEE-level method, treat hard problems as in-syllabus, and state a limitation if no JEE-level method exists. The app does not embed the official syllabus text; the AI is told to treat the official syllabi as authoritative and a compact chapter list is only a naming hint.
 
-The implementation sends screenshots only after the user starts a scan. Avoid scanning passwords, private messages, payment screens, personal records or other sensitive material.
+## Token-saving architecture
+- Stage 1 returns concise JSON only; explanations are generated only on demand, for one question.
+- Identical scans (same image hash and settings) are answered from an in-memory cache with zero requests.
+- Stage 2 re-sends only a small crop, and only for figures, unclear text or low confidence (or if you force it in Settings); otherwise text only.
+- Images are resized/JPEG-compressed (Low / Balanced / High); maximum questions per scan and per-stage output caps.
+- Settings > AI shows requests made / successful / failed / cached, **actual** tokens reported by Groq, and **locally estimated** tokens, kept separate.
 
-## Run in Android Studio
-
-1. Install Android Studio and the Android SDK Platform 35 / Build Tools 35.0.0.
-2. Extract or clone this repository.
-3. Open the `SnapGPT-Android` folder in Android Studio.
-4. Use JDK 17 for Gradle.
-5. Let Android Studio sync Gradle dependencies.
-6. Run the `app` configuration on a physical Android device. Overlay and MediaProjection behaviour should be tested on a real device.
-
-The repository includes a small self-bootstrapping `gradlew` script that downloads the pinned Gradle 8.9 distribution if a system Gradle is not installed. It is not the stock Gradle Wrapper JAR distribution. Android Studio may instead use its configured Gradle distribution during project import.
-
-Build locally from a terminal with network access:
-
+## Build
+Local:
 ```bash
-./gradlew testDebugUnitTest
+./gradlew test
 ./gradlew assembleDebug
+# APK: app/build/outputs/apk/debug/app-debug.apk
 ```
+The debug APK is signed with the auto-generated Android debug keystore; **no private credentials are needed**.
 
-On Windows:
+### GitHub Actions (builds the APK for you)
+1. Create a GitHub repository.
+2. Upload the entire `SnapGPT-Android` folder contents (including the hidden `.github` folder and `gradle/wrapper/gradle-wrapper.jar`), or `git init`, `git add .`, `git commit`, `git remote add origin ...`, `git push -u origin main`.
+3. Open the repository's **Actions** tab.
+4. Select **Build Android APK**.
+5. Wait for it to finish (also runs on every push to `main`, on pull requests, and via *Run workflow*).
+6. Open the completed run.
+7. Download the **SnapGPT-Android-Debug-APK** artifact (a ZIP).
+8. Extract the ZIP.
+9. Copy `app-debug.apk` to your phone and install it (allow "Install unknown apps" for your file manager or browser).
 
-```bat
-gradlew.bat testDebugUnitTest
-gradlew.bat assembleDebug
-```
+GitHub Actions only produces the APK; it does not publish anything to Google Play. Status of this workflow: structure validated (YAML parses; wrapper validation, JDK 17, Android SDK, Gradle cache, unit tests, `assembleDebug`, artifact upload, logs on failure). **A live GitHub run is still pending.**
 
-The debug APK output is:
+### Release signing (optional)
+Keep credentials **outside the repository** (`*.jks`, `*.keystore` and `keystore.properties` are git-ignored).
+1. Create a keystore once: `keytool -genkeypair -v -keystore release.jks -alias snapgpt -keyalg RSA -keysize 2048 -validity 10000`. Store it and its passwords somewhere safe; losing it means you cannot update installed apps.
+2. Locally: `export SNAPGPT_KEYSTORE_PATH=/path/to/release.jks SNAPGPT_KEYSTORE_PASSWORD=... SNAPGPT_KEY_ALIAS=snapgpt SNAPGPT_KEY_PASSWORD=...` then `./gradlew assembleRelease`. Without these variables the release build is unsigned.
+3. On GitHub: add secrets `SNAPGPT_KEYSTORE_BASE64` (`base64 -w0 release.jks`), `SNAPGPT_KEYSTORE_PASSWORD`, `SNAPGPT_KEY_ALIAS`, `SNAPGPT_KEY_PASSWORD`, then run **Build signed release APK (optional)** manually.
 
-```text
-app/build/outputs/apk/debug/app-debug.apk
-```
+## Privacy
+- Nothing is captured until you tap Scan; the virtual display is attached to a buffer only for that capture, and SnapGPT's own windows are hidden during it.
+- Screenshots go only to Groq, only when you scan or ask. Nothing is uploaded in the background and there is no analytics.
+- History (questions, answers, explanations, small thumbnails, token counts) stays on-device; it can be turned off, and thumbnails, conversations or everything can be deleted in Settings > Privacy.
+- Backups are disabled so the encrypted key and history are not copied off the device.
 
-## GitHub Actions: build the APK
-
-1. Create a GitHub repository, for example `SnapGPT-Android`.
-2. Upload the full contents of this project to the repository root. The `.github/workflows` folder must be included.
-3. Push or commit to `main` (the workflow also supports `master` and pull requests).
-4. Open the repository's **Actions** tab.
-5. Select **Build Android APK**. It runs automatically on push; you can also choose **Run workflow**.
-6. Open the completed workflow run.
-7. Download the artifact named **SnapGPT-Android-Debug-APK**.
-8. Extract the artifact ZIP and install `app-debug.apk` on your Android device. Android may ask you to permit installation from the browser or file manager that opened the APK.
-
-The workflow installs JDK 17, Android platform/build tools 35, Gradle 8.9, runs unit tests and assembles the debug APK. It uploads build reports if the workflow fails.
-
-## Signed release workflow (optional)
-
-The manual workflow `.github/workflows/release-android.yml` builds a signed release APK. Before running it, add these repository Actions secrets:
-
-- `ANDROID_KEYSTORE_BASE64`: Base64-encoded keystore file.
-- `ANDROID_KEYSTORE_PASSWORD`: keystore password.
-- `ANDROID_KEY_ALIAS`: signing key alias.
-- `ANDROID_KEY_PASSWORD`: key password.
-
-Keep the keystore and passwords private. Never commit them to Git. The release workflow fails early when required secrets are missing. The debug workflow does not require signing secrets.
-
-## Permissions
-
-- **Display over other apps (`SYSTEM_ALERT_WINDOW`)**: shows the draggable assistant and answer bubbles.
-- **Foreground service**: keeps the user-enabled overlay alive while the user switches between apps.
-- **MediaProjection foreground service**: carries out a screen capture after Android's consent UI is approved.
-- **Notifications**: shows the ongoing service notification on Android versions that require notification permission.
-- **Internet**: sends the user-selected screenshot and prompts to Groq and checks API connectivity.
-
-The user can stop the floating service from SnapGPT or its ongoing notification. SnapGPT does not use an Accessibility Service and does not capture continuously.
-
-## Two-stage token-conscious flow
-
-- **Stage 1** sends one screenshot request asking for question text, subject/chapter where known, concise answer and normalized bounding boxes. It does not ask for worked explanations.
-- **Stage 2** runs only when an answer bubble is tapped. It sends a crop of that question plus the detected context to Groq.
-- Follow-up questions use the question and explanation text rather than automatically resending the original screenshot.
-
-Actual token fields are read from Groq responses when provided. Local usage totals are not the same as the account's remaining quota.
+## Known Android limitations
+- **Protected content** (`FLAG_SECURE`: banking apps, DRM video, some exam apps) is delivered by Android as a black frame. SnapGPT detects this and tells you; it does not and cannot bypass it.
+- MediaProjection consent is required each time the assistant starts; Android 14+ ends capture when the user stops it from the status bar, after which the next scan asks again.
+- Overlays cannot appear over some system screens (permission dialogs, lock screen) and some OEM ROMs add extra restrictions (battery optimisation may kill the service).
+- Rotating the screen clears answer bubbles (their positions belong to the old layout) and re-lays out the circle and panel.
+- Answer-bubble accuracy depends on the AI's bounding boxes; the parser rescales common 0-100 and 0-1000 and pixel notations, but boxes can still be off.
+- The explanation panel's text field only becomes focusable while you type (Android does not allow keyboards in non-focusable overlay windows).
+- AI answers can be wrong. Verify important results.
 
 ## Troubleshooting
+- **Workflow fails at compile**: open the failed run, expand *Build debug APK*, and fix the reported Kotlin error (the Android layers were never compiled by the author). The *SnapGPT-Android-Build-Logs* artifact has the reports.
+- **Dependency not found**: versions are pinned in `gradle/libs.versions.toml`; bump the named version.
+- **Circle does not appear**: check *Draw over other apps* is on for SnapGPT and that the notification was not swiped away (Stop it and start again).
+- **"Screen came back blank"**: the app in front blocks screenshots.
+- **Scan times out**: some devices send no frame for a completely static screen; try again after scrolling a little, and report the device model.
+- **Invalid key / model not listed**: Settings > AI > Test connection shows which.
+- **No answers positioned correctly**: try *Select question area* around a single question.
 
-- **Floating button does not appear:** allow SnapGPT under Android Settings → Apps → Special app access → Display over other apps, then tap Enable again.
-- **Notification permission prompt:** allow notifications so Android can show the ongoing foreground-service notice.
-- **Capture permission cancelled:** tap the floating button and start the scan again; Android consent is required for each scan session.
-- **Black/blank capture:** the app being captured may use protected content or the device may restrict projection.
-- **401 from Groq:** confirm the API key in SnapGPT Settings.
-- **429 from Groq:** check the Groq Console for current rate-limit/quota status and retry later.
-- **Model not found or unavailable:** check Groq's current model catalogue and the account's model access. Do not assume model IDs or free-tier quotas are permanent.
-- **No question bubbles:** ensure the question is readable in the captured image and retry with Select question area.
-- **Build failure:** open the workflow run and inspect the Gradle error; if it is a dependency or SDK download error, rerun after the GitHub runner network is available.
+## Tests
+`./gradlew test` runs: Stage 1 parsing/validation and box normalisation, prompt content per mode and setting, the Groq client against a local mock server (auth header, image payload, usage, 401/404/413/429/5xx, cool-down, network failure), bubble placement and coordinate mapping, answer formatting, token accounting, image sizing, settings defaults and LaTeX clean-up.
 
-## Repository layout
-
-```text
-SnapGPT-Android/
-├── .github/workflows/
-│   ├── build-android.yml
-│   └── release-android.yml
-├── app/src/main/
-│   ├── AndroidManifest.xml
-│   ├── java/com/snapgpt/
-│   │   ├── MainActivity.kt
-│   │   ├── ai/
-│   │   ├── capture/
-│   │   ├── data/
-│   │   └── overlay/
-│   └── res/values/
-├── gradle/wrapper/gradle-wrapper.properties
-├── build.gradle.kts
-├── settings.gradle.kts
-├── gradlew
-└── README.md
-```
+Not covered by automated tests (needs a device): floating overlay, dragging and transparency, MediaProjection capture, area selection UI, permission flows, Room, DataStore persistence, Keystore, live Groq calls.
 
 ## License
-
-Choose and add a license before distributing this project publicly. This repository intentionally does not claim third-party rights or include API credentials.
+MIT, see `LICENSE`.
