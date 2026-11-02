@@ -158,8 +158,9 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
     private suspend fun runScan(type: ScanType) {
         try {
             settings = container.settings.current()
-            if (!container.keyStore.hasKey()) {
-                throw AiException(AiErrorCode.NO_API_KEY, "No Groq API key yet. Open SnapGPT > Settings > AI and add one.")
+            val hasEnabledAccount = settings.apiAccounts.any { it.enabled && container.keyStore.hasKey(it.id) }
+            if (!hasEnabledAccount) {
+                throw AiException(AiErrorCode.NO_API_KEY, "No enabled API key yet. Open SnapGPT > Settings > AI APIs and add or enable one.")
             }
             overlay.clearAnswers()
             val shot = grabCleanScreenshot()
@@ -214,7 +215,7 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
                 val cropped = BitmapCodec.crop(shot, rect)
                 val region = FRect(rect.left, rect.top, rect.left + cropped.width, rect.top + cropped.height)
                 if (cropped !== shot) shot.recycle()
-                analyze(cropped, region, ScanType.AREA) // Only the selected region is sent to Groq.
+                analyze(cropped, region, ScanType.AREA) // Only the selected region is sent to the selected API account.
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AiException) {
@@ -250,10 +251,13 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         }
         overlay.showAnswers(items)
         if (outcome.fromCache) overlay.toast("Same screen as your last scan: answered from the local cache (no tokens used).")
-        else outcome.warnings.firstOrNull()?.let { overlay.toast(it) }
+        else {
+            val status = outcome.warnings.firstOrNull() ?: "Answered using ${outcome.providerUsed}."
+            overlay.toast(status)
+        }
 
         if (settings.historyEnabled) {
-            runCatching { container.history.saveSession(live, settings.examMode.key, settings.model, settings.saveThumbnails) }
+            runCatching { container.history.saveSession(live, settings.examMode.key, (settings.apiAccounts.firstOrNull()?.model ?: settings.model), settings.saveThumbnails) }
         }
     }
 
@@ -285,14 +289,17 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         explainJob = scope.launch {
             overlay.setAnswerLoading(id, true)
             overlay.setPanelBusy(true)
-            overlay.setPanelBody("Explaining this question…\n\nOnly this question is sent to Groq.")
+            overlay.setPanelBody("Explaining this question…\n\nOnly this question is sent to the selected API account.")
             try {
                 val out = container.ai.explain(lq.question, s.cropFor(lq.question))
                 lq.explanation = out.text
                 lq.followUps.clear()
                 recordUsage(s, out.usage)
                 lq.rowId?.let { container.history.saveExplanation(it, out.text) }
-                if (activeQuestionId == id) overlay.setPanelBody(transcript(lq))
+                if (activeQuestionId == id) {
+                    val source = if (out.providerUsed.isBlank()) "" else "_API account: ${out.providerUsed}_\n\n"
+                    overlay.setPanelBody(source + transcript(lq))
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AiException) {
@@ -333,7 +340,8 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
                     container.history.addMessage(it, "user", text)
                     container.history.addMessage(it, "assistant", out.text)
                 }
-                overlay.setPanelBody(transcript(lq), scrollToEnd = true)
+                val source = if (out.providerUsed.isBlank()) "" else "_Latest reply by ${out.providerUsed}_\n\n"
+                overlay.setPanelBody(source + transcript(lq), scrollToEnd = true)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AiException) {

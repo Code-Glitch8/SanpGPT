@@ -99,7 +99,7 @@ fun HistoryScreen(vm: MainViewModel, onBack: () -> Unit, onOpen: (Long) -> Unit)
                                     listOf(if (s.scanType == "AREA") "Area" else "Full screen", s.summary.ifBlank { "No subject" }).joinToString(" · "),
                                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                Text("${s.totalTokens} tokens (Groq-reported)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("${s.totalTokens} tokens (provider-reported)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             IconButton(onClick = { confirmOne = s }) { Icon(Icons.Default.Delete, contentDescription = "Delete scan") }
                         }

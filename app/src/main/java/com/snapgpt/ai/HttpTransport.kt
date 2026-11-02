@@ -8,7 +8,7 @@ import kotlin.coroutines.resumeWithException
 
 data class HttpResponse(val status: Int, val headers: Map<String, String>, val body: String)
 
-/** Minimal HTTP abstraction so the Groq client can be tested against a local mock server. */
+/** Minimal HTTP abstraction so the OpenAI-compatible API client can be tested against a local mock server. */
 interface HttpTransport {
     suspend fun execute(
         method: String,

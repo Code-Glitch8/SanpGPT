@@ -49,11 +49,12 @@ enum class ConnectionState { CONNECTED, INVALID_KEY, MODEL_MISSING, NETWORK_ERRO
 data class ConnectionResult(val state: ConnectionState, val message: String)
 
 object GroqRequestBuilder {
-    fun build(request: ChatRequest): String {
+    fun build(request: ChatRequest, useGroqExtensions: Boolean = true): String {
         val body = buildJsonObject {
             put("model", request.model)
             put("temperature", request.temperature)
-            put("max_completion_tokens", request.maxCompletionTokens)
+            if (useGroqExtensions) put("max_completion_tokens", request.maxCompletionTokens)
+            else put("max_tokens", request.maxCompletionTokens)
             put("stream", false)
             if (request.reasoningFormat != null) put("reasoning_format", request.reasoningFormat)
             if (request.jsonMode) putJsonObject("response_format") { put("type", "json_object") }
@@ -91,7 +92,9 @@ object GroqRequestBuilder {
 class GroqClient(
     private val transport: HttpTransport = UrlConnectionTransport(),
     private val baseUrl: String = AiDefaults.BASE_URL,
-    val gate: RateLimitGate = RateLimitGate(),
+    private val providerName: String = "Groq",
+    val gate: RateLimitGate = RateLimitGate(providerName),
+    private val useGroqExtensions: Boolean = providerName == "Groq",
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -99,22 +102,24 @@ class GroqClient(
     var lastRateLimit: RateLimitInfo = RateLimitInfo()
         private set
 
+    fun resetCooldown() = gate.reset()
+
     suspend fun chat(apiKey: String, request: ChatRequest): ChatResult {
-        if (apiKey.isBlank()) throw AiException(AiErrorCode.NO_API_KEY, "No Groq API key is saved. Add one in SnapGPT > Settings > AI.")
+        if (apiKey.isBlank()) throw AiException(AiErrorCode.NO_API_KEY, "No API key is saved for $providerName. Add it in SnapGPT > Settings > AI APIs.")
         val imageCount = request.messages.sumOf { it.imageDataUrls.size }
         if (imageCount > AiDefaults.MAX_IMAGES_PER_REQUEST) {
             throw AiException(AiErrorCode.IMAGE_UNSUPPORTED, "This model accepts at most ${AiDefaults.MAX_IMAGES_PER_REQUEST} images per request.")
         }
         gate.check()
-        val body = GroqRequestBuilder.build(request)
+        val body = GroqRequestBuilder.build(request, useGroqExtensions)
         if (body.toByteArray(Charsets.UTF_8).size > AiDefaults.REQUEST_BUDGET_BYTES) {
-            throw AiException(AiErrorCode.IMAGE_TOO_LARGE, "The request is larger than 18 MB (Groq's limit is 20 MB). Lower the image quality or select a smaller area.")
+            throw AiException(AiErrorCode.IMAGE_TOO_LARGE, "The request is larger than SnapGPT's 18 MB safety budget. Lower the image quality or select a smaller area.")
         }
         val response = send("POST", "$baseUrl/chat/completions", apiKey, body)
         lastRateLimit = rateLimitOf(response.headers)
         if (response.status !in 200..299) {
             val retry = response.headers["retry-after"]?.trim()?.toDoubleOrNull()?.let { Math.ceil(it).toInt() }
-            val err = GroqErrorMapper.map(response.status, response.body, retry, request.model)
+            val err = GroqErrorMapper.map(response.status, response.body, retry, request.model, providerName)
             if (response.status == 429) gate.block(retry ?: 30)
             throw err
         }
@@ -128,9 +133,13 @@ class GroqClient(
             val response = send("GET", "$baseUrl/models", apiKey, null)
             lastRateLimit = rateLimitOf(response.headers)
             when {
-                response.status == 401 -> ConnectionResult(ConnectionState.INVALID_KEY, "Groq rejected the key (HTTP 401).")
+                response.status == 401 -> ConnectionResult(ConnectionState.INVALID_KEY, "$providerName rejected the key (HTTP 401).")
+                response.status == 404 || response.status == 405 -> ConnectionResult(
+                    ConnectionState.OTHER_ERROR,
+                    "The endpoint is reachable but does not expose GET /models. This check cannot validate the key or model; run a scan to test Chat Completions."
+                )
                 response.status !in 200..299 -> {
-                    val e = GroqErrorMapper.map(response.status, response.body, null, model)
+                    val e = GroqErrorMapper.map(response.status, response.body, null, model, providerName)
                     ConnectionResult(ConnectionState.OTHER_ERROR, e.message ?: "HTTP ${response.status}")
                 }
                 else -> {
@@ -141,7 +150,7 @@ class GroqClient(
                         emptyList()
                     }
                     if (ids.isEmpty() || model in ids) ConnectionResult(ConnectionState.CONNECTED, "Connected. Model \"$model\" is available.")
-                    else ConnectionResult(ConnectionState.MODEL_MISSING, "Key is valid, but \"$model\" was not listed for it. SnapGPT will not switch models for you.")
+                    else ConnectionResult(ConnectionState.MODEL_MISSING, "Key is valid, but \"$model\" was not listed for this account.")
                 }
             }
         } catch (e: AiException) {
@@ -160,13 +169,13 @@ class GroqClient(
         } catch (e: CancellationException) {
             throw e
         } catch (e: SocketTimeoutException) {
-            throw AiException(AiErrorCode.TIMEOUT, "Groq took too long to answer. Check your connection and try again.")
+            throw AiException(AiErrorCode.TIMEOUT, "$providerName took too long to answer. Check your connection and try again.")
         } catch (e: UnknownHostException) {
-            throw AiException(AiErrorCode.NETWORK, "Cannot reach Groq. Check your internet connection.")
+            throw AiException(AiErrorCode.NETWORK, "Cannot reach $providerName. Check your internet connection.")
         } catch (e: SSLException) {
-            throw AiException(AiErrorCode.NETWORK, "Secure connection to Groq failed. Check the date/time and network.")
+            throw AiException(AiErrorCode.NETWORK, "Secure connection to $providerName failed. Check the date/time and network.")
         } catch (e: IOException) {
-            throw AiException(AiErrorCode.NETWORK, "Network error while talking to Groq. Check your internet connection.")
+            throw AiException(AiErrorCode.NETWORK, "Network error while talking to $providerName. Check your internet connection.")
         }
     }
 
@@ -184,7 +193,7 @@ class GroqClient(
         val root = try {
             json.parseToJsonElement(body).jsonObject
         } catch (e: Exception) {
-            throw AiException(AiErrorCode.INVALID_RESPONSE, "Groq returned an unreadable response. Please try again.")
+            throw AiException(AiErrorCode.INVALID_RESPONSE, "$providerName returned an unreadable response. Please try again.")
         }
         val choice = (root["choices"] as? JsonArray)?.firstOrNull() as? JsonObject
         val message = choice?.get("message") as? JsonObject
@@ -200,8 +209,8 @@ class GroqClient(
         }
         val visible = JsonExtract.stripThinking(content)
         if (visible.isBlank()) {
-            if (finish == "length") throw AiException(AiErrorCode.TRUNCATED, "Groq used the whole response budget while reasoning and returned no answer. Try a smaller area or fewer questions.")
-            throw AiException(AiErrorCode.INVALID_RESPONSE, "Groq returned an empty answer. Please try again.")
+            if (finish == "length") throw AiException(AiErrorCode.TRUNCATED, "$providerName used the whole response budget and returned no answer. Try a smaller area or fewer questions.")
+            throw AiException(AiErrorCode.INVALID_RESPONSE, "$providerName returned an empty answer. Please try again.")
         }
         return ChatResult(visible, usage, finish, lastRateLimit)
     }

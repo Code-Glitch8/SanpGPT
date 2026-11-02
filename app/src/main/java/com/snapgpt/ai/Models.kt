@@ -1,6 +1,6 @@
 package com.snapgpt.ai
 
-/** Groq endpoints, default model and request limits (see https://console.groq.com/docs/vision). */
+/** Default Groq endpoint, vision model and conservative request limits (see https://console.groq.com/docs/vision). */
 object AiDefaults {
     const val BASE_URL = "https://api.groq.com/openai/v1"
     const val CHAT_URL = "$BASE_URL/chat/completions"

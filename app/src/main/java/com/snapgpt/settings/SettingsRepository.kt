@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.io.IOException
+import org.json.JSONArray
+import org.json.JSONObject
 
 private val Context.settingsStore by preferencesDataStore(name = "snapgpt_settings")
 
@@ -31,6 +33,8 @@ class SettingsRepository(private val context: Context) {
         val lastX = floatPreferencesKey("last_pos_x")
         val lastY = floatPreferencesKey("last_pos_y")
         val model = stringPreferencesKey("model")
+        val apiAccounts = stringPreferencesKey("api_accounts_json")
+        val automaticFailover = booleanPreferencesKey("automatic_api_failover")
         val examMode = stringPreferencesKey("exam_mode")
         val syllabus = booleanPreferencesKey("syllabus_restriction")
         val chapter = booleanPreferencesKey("show_chapter_topic")
@@ -62,6 +66,41 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    private fun encodeAccounts(accounts: List<ApiAccount>): String = JSONArray().apply {
+        accounts.forEach { a ->
+            put(JSONObject().apply {
+                put("id", a.id)
+                put("name", a.name)
+                put("baseUrl", a.baseUrl)
+                put("model", a.model)
+                put("enabled", a.enabled)
+                put("kind", a.kind.name)
+            })
+        }
+    }.toString()
+
+    private fun decodeAccounts(raw: String): List<ApiAccount> = try {
+        val arr = JSONArray(raw)
+        buildList {
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val kind = runCatching { ApiAccountKind.valueOf(o.optString("kind", ApiAccountKind.OPENAI_COMPATIBLE.name)) }
+                    .getOrDefault(ApiAccountKind.OPENAI_COMPATIBLE)
+                val id = o.optString("id").takeIf { it.isNotBlank() } ?: "imported-$i"
+                add(ApiAccount(
+                    id = id,
+                    name = o.optString("name", "API ${i + 1}"),
+                    baseUrl = o.optString("baseUrl", ""),
+                    model = o.optString("model", ""),
+                    enabled = o.optBoolean("enabled", true),
+                    kind = kind,
+                ))
+            }
+        }
+    } catch (_: Exception) {
+        listOf(ApiAccount.groq())
+    }
+
     private fun Preferences.toSettings(): AppSettings {
         val d = AppSettings()
         return AppSettings(
@@ -72,6 +111,8 @@ class SettingsRepository(private val context: Context) {
             lastPosX = this[K.lastX] ?: d.lastPosX,
             lastPosY = this[K.lastY] ?: d.lastPosY,
             model = (this[K.model] ?: AiDefaults.DEFAULT_MODEL).ifBlank { AiDefaults.DEFAULT_MODEL },
+            apiAccounts = this[K.apiAccounts]?.let(::decodeAccounts) ?: listOf(ApiAccount.groq()),
+            automaticApiFailover = this[K.automaticFailover] ?: true,
             examMode = ExamMode.fromKey(this[K.examMode]),
             syllabusRestriction = this[K.syllabus] ?: d.syllabusRestriction,
             showChapterTopic = this[K.chapter] ?: d.showChapterTopic,
@@ -94,6 +135,8 @@ class SettingsRepository(private val context: Context) {
         this[K.lastX] = s.lastPosX
         this[K.lastY] = s.lastPosY
         this[K.model] = s.model
+        this[K.apiAccounts] = encodeAccounts(s.apiAccounts)
+        this[K.automaticFailover] = s.automaticApiFailover
         this[K.examMode] = s.examMode.key
         this[K.syllabus] = s.syllabusRestriction
         this[K.chapter] = s.showChapterTopic

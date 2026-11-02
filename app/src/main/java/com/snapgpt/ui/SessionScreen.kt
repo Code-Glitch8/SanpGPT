@@ -68,7 +68,7 @@ fun SessionScreen(sessionId: Long, onBack: () -> Unit) {
             LazyColumn(Modifier.fillMaxSize().padding(pad), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     Text(
-                        "${s.session.model} · ${s.session.examMode} · ${s.session.totalTokens} tokens (Groq-reported)",
+                        "${s.session.model} · ${s.session.examMode} · ${s.session.totalTokens} tokens (provider-reported)",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }

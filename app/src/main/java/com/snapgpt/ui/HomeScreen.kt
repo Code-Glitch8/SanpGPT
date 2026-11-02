@@ -62,6 +62,7 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onHistory: () -> Unit,
     val projection by vm.projectionReady.collectAsStateWithLifecycle()
     val perms by vm.perms.collectAsStateWithLifecycle()
     val hasKey by vm.hasKey.collectAsStateWithLifecycle()
+    val hasEnabledApi = hasKey && settings.apiAccounts.any { it.enabled && vm.hasApiKey(it.id) }
     val connection by vm.connection.collectAsStateWithLifecycle()
     val sessions by vm.sessions.collectAsStateWithLifecycle()
 
@@ -86,7 +87,7 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onHistory: () -> Unit,
     fun start() {
         when {
             !perms.overlay -> dialog = StartDialog.OVERLAY
-            !hasKey -> dialog = StartDialog.KEY
+            !hasEnabledApi -> dialog = StartDialog.KEY
             Build.VERSION.SDK_INT >= 33 && !perms.notifications -> dialog = StartDialog.NOTIFICATIONS
             else -> launchConsent()
         }
@@ -130,13 +131,13 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onHistory: () -> Unit,
                     if (perms.notifications) "Allowed (shows the Stop button)" else "Optional; the assistant still works",
                 )
                 StatusRow("Screen capture", projection, if (projection) "Authorised for this session" else "Asked each time the assistant starts")
-                StatusRow("Groq API key", hasKey, if (hasKey) "Saved securely on this device" else "Add it in Settings > AI")
+                StatusRow("AI API accounts", hasEnabledApi, if (hasEnabledApi) "At least one enabled account has a saved key" else "Add and enable one in Settings > AI APIs")
                 StatusRow(
-                    "Groq connection", connection.state == ConnectionState.CONNECTED,
+                    "API connection", connection.state == ConnectionState.CONNECTED,
                     connection.message,
                 )
-                StatusRow("Model", true, settings.model)
-                OutlinedButton(onClick = { vm.testConnection() }, enabled = hasKey && !connection.testing) {
+                StatusRow("Primary model", true, settings.apiAccounts.firstOrNull { it.enabled }?.model ?: settings.model)
+                OutlinedButton(onClick = { vm.testConnection() }, enabled = hasEnabledApi && !connection.testing) {
                     Text(if (connection.testing) "Testing…" else "Test connection")
                 }
             }
@@ -191,8 +192,8 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onHistory: () -> Unit,
         )
         StartDialog.KEY -> AlertDialog(
             onDismissRequest = { dialog = null },
-            title = { Text("Add your Groq API key first") },
-            text = { Text("SnapGPT needs a Groq API key to analyse screenshots. Get a free key at console.groq.com/keys and paste it in Settings > AI.") },
+            title = { Text("Add an API key first") },
+            text = { Text("SnapGPT needs at least one enabled API account with a saved key. Add a Groq, OpenRouter or custom OpenAI-compatible vision API in Settings > AI APIs.") },
             confirmButton = { TextButton(onClick = { dialog = null; onSettings() }) { Text("Open settings") } },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("Later") } },
         )

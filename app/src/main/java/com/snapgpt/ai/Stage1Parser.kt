@@ -92,17 +92,17 @@ object Stage1Parser {
 
     fun parse(raw: String, maxQuestions: Int, imageWidth: Int, imageHeight: Int): Stage1Result {
         val payload = JsonExtract.extract(raw)
-            ?: throw AiException(AiErrorCode.INVALID_RESPONSE, "Groq did not return the expected JSON. Please scan again.")
+            ?: throw AiException(AiErrorCode.INVALID_RESPONSE, "The API did not return the expected JSON. Please scan again.")
         val root: JsonElement = try {
             json.parseToJsonElement(payload)
         } catch (e: Exception) {
-            throw AiException(AiErrorCode.INVALID_RESPONSE, "Groq returned malformed JSON. Please scan again.")
+            throw AiException(AiErrorCode.INVALID_RESPONSE, "The API returned malformed JSON. Please scan again.")
         }
         val array: JsonArray = when {
             root is JsonArray -> root
             root is JsonObject && root["questions"] is JsonArray -> root["questions"] as JsonArray
             root is JsonObject && root["questions"] == null && root["question_text"] != null -> JsonArray(listOf(root))
-            else -> throw AiException(AiErrorCode.INVALID_RESPONSE, "Groq's reply had no \"questions\" list. Please scan again.")
+            else -> throw AiException(AiErrorCode.INVALID_RESPONSE, "The API reply had no \"questions\" list. Please scan again.")
         }
 
         val warnings = mutableListOf<String>()

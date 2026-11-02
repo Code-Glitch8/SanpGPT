@@ -37,6 +37,9 @@ data class AppSettings(
     val lastPosY: Float = -1f,
     // AI
     val model: String = AiDefaults.DEFAULT_MODEL,
+    /** Unlimited API accounts. Their list order is the failover priority order. */
+    val apiAccounts: List<ApiAccount> = listOf(ApiAccount.groq()),
+    val automaticApiFailover: Boolean = true,
     // JEE
     val examMode: ExamMode = ExamMode.AUTOMATIC,
     val syllabusRestriction: Boolean = true,

@@ -2,10 +2,10 @@
 
 Native AI floating screen assistant for JEE Main / JEE Advanced students. A small draggable circle floats over other apps; tap it to scan the screen (or a selected area), get **concise answers** next to every detected question, then tap an answer for a **detailed JEE-level explanation**.
 
-Kotlin · Jetpack Compose (Material 3) · WindowManager overlays · MediaProjection · Foreground Service · Coroutines · DataStore · Room · Android Keystore · Groq API. Not a WebView app.
+Kotlin · Jetpack Compose (Material 3) · WindowManager overlays · MediaProjection · Foreground Service · Coroutines · DataStore · Room · Android Keystore · multi-account OpenAI-compatible vision APIs. Not a WebView app.
 
 > **Honest build status** — read this first
-> - Unit tests cover the pure logic (Groq client, Stage 1 JSON validation, prompts, coordinate mapping, answer placement and token accounting). Groq client tests use an injected in-memory HTTP transport, so they do not require a JDK-only HTTP server, live network access or an API key. Run `./gradlew test` to execute them.
+> - Unit tests cover the pure logic (OpenAI-compatible API client, account failover policy, Stage 1 JSON validation, prompts, coordinate mapping, answer placement and token accounting). API client tests use an injected in-memory HTTP transport, so they do not require a JDK-only HTTP server, live network access or an API key. Run `./gradlew test` to execute them.
 > - The Android layers (Compose UI, overlay windows, MediaProjection capture, Room, Keystore, foreground service) and the Gradle/AGP build **have not been compiled or run** by the author: the authoring environment had no Android SDK and could not reach Maven/Google/Gradle servers.
 > - **No APK has been built and none is included.** The GitHub Actions workflow has been validated for structure only; a live run is still pending. The first run on GitHub may reveal compile errors to fix; see [Troubleshooting](#troubleshooting).
 > - No live Groq request and no on-device test (overlay, capture, permissions, rotation) has been performed. Treat everything on-device as untested until you try it.
@@ -23,7 +23,7 @@ Kotlin · Jetpack Compose (Material 3) · WindowManager overlays · MediaProject
 
 ## Requirements
 - Android 8.0+ (API 26). Compiles against SDK 35 (Android 15).
-- A Groq API key: <https://console.groq.com/keys>
+- At least one API key (Groq recommended): <https://console.groq.com/keys>
 - To build locally: JDK 17 and Android SDK 35 (Android Studio Ladybug or newer is easiest).
 
 ## Repository structure
@@ -36,7 +36,7 @@ SnapGPT-Android/
 │   ├── ui/        Compose screens, theme, view models
 │   ├── overlay/   floating circle, menu, selection, answer bubbles, explanation panel, placement maths
 │   ├── capture/   MediaProjection capture, consent activity, JPEG encoding, image sizing
-│   ├── ai/        Groq client, prompts, Stage 1 parser, AiService, usage accounting
+│   ├── ai/        Compatible API clients, failover router, prompts, Stage 1 parser and usage accounting
 │   ├── jee/       exam modes and JEE instruction builder
 │   ├── history/   session models, history repository
 │   ├── settings/  DataStore settings, Keystore key storage, usage store
@@ -49,7 +49,7 @@ SnapGPT-Android/
 
 ## Install (use the app)
 1. Install the APK (see below) and open **SnapGPT**.
-2. **Settings > AI**: paste your Groq key, *Save key*, then *Test connection* (should say Connected).
+2. **Settings > AI APIs**: add one or more API accounts, enter each image-capable model and key, then press *Test* on each account. The order in the list is the fallback priority.
 3. Home > **Start assistant**. Grant, when asked:
    - *Draw over other apps* (system settings page opens; switch SnapGPT on, return, press Start again).
    - *Notifications* (Android 13+; optional, shows a Stop button).
@@ -58,16 +58,23 @@ SnapGPT-Android/
 5. Answers appear beside the questions. Tap one for the explanation panel (drag the header to move, – to collapse, type a follow-up, Copy answer / Copy steps / Regenerate, ✕ to close).
 6. Stop any time with the notification's **Stop** button or **Stop assistant** in the app.
 
-## Groq API setup
-- Endpoint: `https://api.groq.com/openai/v1/chat/completions`. Default model: `qwen/qwen3.8-27b`.
-- Checked against <https://console.groq.com/docs/vision>: this model accepts image input and JSON mode, up to 3 images per request, about 2,048 input tokens per image, 20 MB request limit. Model availability changes; SnapGPT **never switches models silently** and shows a clear error if the model is unavailable. You can type another vision-capable model id in Settings.
-- Requests send images as base64 JPEG data URLs, `response_format: json_object` for Stage 1, `reasoning_format: hidden`, a completion budget that leaves room for reasoning, 15 s connect / 120 s read timeouts. HTTP 429 is never retried automatically; SnapGPT waits for `retry-after`.
-- **Key security:** the key is AES-GCM encrypted with an Android Keystore key and never written to logs. A key inside any mobile app can still be extracted by someone controlling the device or process. Use a dedicated key you can revoke. For a public release, put a backend proxy in front of Groq: construct `GroqClient(baseUrl = "https://your-proxy/openai/v1")` in `SnapGptApp.kt` and move the key to the server.
+## AI API accounts and automatic failover
+- Add **as many API accounts as needed** in Settings > AI APIs. There is no fixed account-count limit in SnapGPT. Every account has its own display name, HTTPS base URL, vision-capable model ID, enabled switch and separately encrypted API key.
+- You can add multiple keys for the same provider (for example, several Groq keys from different projects) or accounts from different OpenAI-compatible services. Each entry is a separate fallback destination.
+- The order in the list is the fallback priority. Use **Move up / Move down** to change the order. Disable an account to skip it or remove it to delete its configuration and encrypted key.
+- **Automatic API failover** is enabled by default. When one account reaches a quota/credit limit, a request/token rate limit, has an invalid key, an unavailable model, or a transient network/server error, SnapGPT moves to the next enabled account with a saved key. Rate-limited accounts observe the provider's `Retry-After` when present; a quota-exhausted account is temporarily cooled down for up to one hour so the next scan does not immediately hit the same exhausted key again. Saving a replacement key clears that account's cooldown. It does not waste calls retrying other accounts for a malformed request or a screenshot that is locally too large/unsupported.
+- The same screenshot/request may be sent to the next configured account after failover. Settings explains this, and the scan status shows the account that served the answer plus any account failures. If all accounts fail, SnapGPT reports the attempted accounts and final error.
+- This build supports **OpenAI-compatible Chat Completions endpoints** accepting `POST /chat/completions`, Bearer authentication, and image inputs using `image_url` data URLs. Presets are available for Groq and OpenRouter; choose **Custom OpenAI-compatible API** for other services implementing that protocol. The API list has no fixed application-level account limit.
+- Native Gemini and Anthropic API protocols are different from OpenAI Chat Completions. They cannot be added as arbitrary compatible URLs in this build; they need dedicated protocol adapters. Do not paste native Gemini/Anthropic endpoints into the custom compatible option.
+- Groq default: base URL `https://api.groq.com/openai/v1`, model `qwen/qwen3.8-27b`. Check current availability and vision support for your own key in the provider's dashboard before relying on a model.
+- Requests use base64 JPEG image data URLs and JSON mode for Stage 1. Groq-specific request extensions are omitted for generic compatible accounts; the common `max_tokens` field is used for those endpoints.
+- **Key security:** each API key is separately AES-GCM encrypted with Android Keystore and never written to logs. A key used by a client app can still be extracted by someone controlling the device or process. Use dedicated keys you can revoke. A backend proxy is preferable for a public release.
+- Existing Groq-only installations are migrated: the previous encrypted Groq key is moved into the default **Groq primary** account when first loaded.
 
 ## Required permissions
 | Permission | Why |
 |---|---|
-| `INTERNET` | Call Groq. |
+| `INTERNET` | Call the selected configured API account. |
 | `SYSTEM_ALERT_WINDOW` | Draw the circle, menu and answer bubbles over other apps. |
 | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PROJECTION` | Required foreground service of type mediaProjection. |
 | `POST_NOTIFICATIONS` | Show the mandatory notification (Android 13+). |
@@ -84,7 +91,7 @@ SnapGPT-Android/
 - Identical scans (same image hash and settings) are answered from an in-memory cache with zero requests.
 - Stage 2 re-sends only a small crop, and only for figures, unclear text or low confidence (or if you force it in Settings); otherwise text only.
 - Images are resized/JPEG-compressed (Low / Balanced / High); maximum questions per scan and per-stage output caps.
-- Settings > AI shows requests made / successful / failed / cached, **actual** tokens reported by Groq, and **locally estimated** tokens, kept separate.
+- Settings > AI APIs shows requests made / successful / failed / cached, **actual** tokens reported by the API provider, and **locally estimated** tokens, kept separate.
 
 ## GitHub Actions SDK setup note
 
@@ -124,7 +131,7 @@ Keep credentials **outside the repository** (`*.jks`, `*.keystore` and `keystore
 
 ## Privacy
 - Nothing is captured until you tap Scan; the virtual display is attached to a buffer only for that capture, and SnapGPT's own windows are hidden during it.
-- Screenshots go only to Groq, only when you scan or ask. Nothing is uploaded in the background and there is no analytics.
+- Screenshots are sent only after a user-initiated scan. With automatic failover enabled, the same screenshot may be sent to the next enabled, configured API account if a previous account is limited or unavailable. Nothing is uploaded in the background and there is no analytics.
 - History (questions, answers, explanations, small thumbnails, token counts) stays on-device; it can be turned off, and thumbnails, conversations or everything can be deleted in Settings > Privacy.
 - Backups are disabled so the encrypted key and history are not copied off the device.
 
@@ -147,9 +154,9 @@ Keep credentials **outside the repository** (`*.jks`, `*.keystore` and `keystore
 - **No answers positioned correctly**: try *Select question area* around a single question.
 
 ## Tests
-`./gradlew test` runs: Stage 1 parsing/validation and box normalisation, prompt content per mode and setting, the Groq client using an injected fake HTTP transport (auth header, image payload, usage, 401/404/413/429/5xx, cool-down, network failure), bubble placement and coordinate mapping, answer formatting, token accounting, image sizing, settings defaults and LaTeX clean-up.
+`./gradlew test` runs: Stage 1 parsing/validation and box normalisation, prompt content per mode and setting, the API client using an injected fake HTTP transport (auth header, image payload, usage, 401/404/413/429/5xx, cool-down, network failure), bubble placement and coordinate mapping, answer formatting, token accounting, image sizing, settings defaults and LaTeX clean-up.
 
-Not covered by automated tests (needs a device): floating overlay, dragging and transparency, MediaProjection capture, area selection UI, permission flows, Room, DataStore persistence, Keystore, live Groq calls.
+Not covered by automated tests (needs a device): floating overlay, dragging and transparency, MediaProjection capture, area selection UI, permission flows, Room, DataStore persistence, Keystore, live provider API calls, and end-to-end multi-account failover against real provider quotas.
 
 ## License
 MIT, see `LICENSE`.

@@ -18,12 +18,8 @@ class AppContainer(app: Application) {
     val database: SnapDatabase by lazy { SnapDatabase.create(app) }
     val history: HistoryRepository by lazy { HistoryRepository(app, database) }
 
-    /**
-     * To use a backend proxy later (recommended for public releases so no key ships on devices), construct the client with
-     * `GroqClient(baseUrl = "https://your-proxy.example.com/openai/v1")` and move key handling to the server.
-     */
-    val groq = GroqClient()
-    val ai = AiService(groq, settings, keyStore, usage)
+    /** The AI service creates a separate compatible client and rate-limit gate for each configured API account. */
+    val ai = AiService(settings, keyStore, usage)
 }
 
 class SnapGptApp : Application() {

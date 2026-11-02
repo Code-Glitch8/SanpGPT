@@ -3,7 +3,7 @@ package com.snapgpt.ai
 /**
  * Token and request accounting.
  *
- * ACTUAL values come from the `usage` object Groq returns. ESTIMATED values are computed locally (about 4 characters per
+ * ACTUAL values come from the `usage` object returned by the successful API provider. ESTIMATED values are computed locally (about 4 characters per
  * token plus ~2048 per image) and are shown separately so they are never mistaken for billing data.
  */
 data class UsageStats(

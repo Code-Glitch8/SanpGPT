@@ -11,50 +11,86 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * Stores the Groq API key encrypted with an AES-256-GCM key that lives in the Android Keystore (hardware-backed where the
- * device supports it). The key material never leaves the Keystore; only ciphertext is written to app-private storage.
- *
- * Limitation (also documented in the README): the app must decrypt the key to call Groq, so a determined attacker with a
- * rooted device or a debugger can still read it from the running process. For a public release use a backend proxy.
+ * Stores one encrypted API secret per API account. AES-256-GCM uses a key held by Android Keystore;
+ * only ciphertext and its IV are stored in app-private SharedPreferences.
+ * A rooted device/debugger can still inspect a key while the app is using it; public releases should
+ * use a backend proxy instead of shipping users' provider keys in a client app.
  */
 class SecureKeyStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("snapgpt_secure", Context.MODE_PRIVATE)
 
-    fun hasKey(): Boolean = prefs.contains(CT)
+    fun hasKey(accountId: String): Boolean = prefs.contains(ctName(accountId)) || (accountId == LEGACY_DEFAULT_ID && prefs.contains(LEGACY_CT))
 
-    fun save(apiKey: String) {
+    fun save(accountId: String, apiKey: String) {
+        require(accountId.isNotBlank()) { "Account ID is required" }
+        require(apiKey.isNotBlank()) { "API key is required" }
         val cipher = Cipher.getInstance(TRANSFORM)
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-        val ct = cipher.doFinal(apiKey.trim().toByteArray(Charsets.UTF_8))
+        val ciphertext = cipher.doFinal(apiKey.trim().toByteArray(Charsets.UTF_8))
         prefs.edit()
-            .putString(IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-            .putString(CT, Base64.encodeToString(ct, Base64.NO_WRAP))
+            .putString(ivName(accountId), Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            .putString(ctName(accountId), Base64.encodeToString(ciphertext, Base64.NO_WRAP))
             .apply()
     }
 
-    /** Returns the decrypted key, or null if none is saved or it can no longer be decrypted (then it is wiped). */
-    fun load(): String? {
-        val iv = prefs.getString(IV, null) ?: return null
-        val ct = prefs.getString(CT, null) ?: return null
-        return try {
-            val cipher = Cipher.getInstance(TRANSFORM)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))
-            String(cipher.doFinal(Base64.decode(ct, Base64.NO_WRAP)), Charsets.UTF_8)
-        } catch (e: Exception) {
-            delete() // Keystore entry lost or data corrupted: the user simply enters the key again.
-            null
+    fun load(accountId: String): String? {
+        val iv = prefs.getString(ivName(accountId), null)
+        val ct = prefs.getString(ctName(accountId), null)
+        if (iv != null && ct != null) return decrypt(iv, ct, accountId)
+
+        // Migrate the single-key format used by earlier SnapGPT builds to the original Groq account.
+        if (accountId == LEGACY_DEFAULT_ID) {
+            val legacyIv = prefs.getString(LEGACY_IV, null)
+            val legacyCt = prefs.getString(LEGACY_CT, null)
+            if (legacyIv != null && legacyCt != null) {
+                val migrated = decrypt(legacyIv, legacyCt, null)
+                if (!migrated.isNullOrBlank()) {
+                    save(accountId, migrated)
+                    prefs.edit().remove(LEGACY_IV).remove(LEGACY_CT).apply()
+                    return migrated
+                }
+            }
         }
+        return null
     }
 
-    fun delete() {
-        prefs.edit().remove(IV).remove(CT).apply()
+    fun delete(accountId: String) {
+        prefs.edit().remove(ivName(accountId)).remove(ctName(accountId)).apply()
+        if (accountId == LEGACY_DEFAULT_ID) prefs.edit().remove(LEGACY_IV).remove(LEGACY_CT).apply()
     }
 
-    /** "gsk_...abcd" style preview that never reveals the full key. */
-    fun masked(): String {
-        val k = load() ?: return ""
+    fun hasAnyKey(): Boolean {
+        if (prefs.contains(LEGACY_CT)) return true
+        return prefs.all.keys.any { it.startsWith(CT_PREFIX) }
+    }
+
+    fun masked(accountId: String): String = mask(load(accountId))
+
+    /** Compatibility helpers for the first Groq-only version. */
+    fun hasKey(): Boolean = hasKey(LEGACY_DEFAULT_ID)
+    fun save(apiKey: String) = save(LEGACY_DEFAULT_ID, apiKey)
+    fun load(): String? = load(LEGACY_DEFAULT_ID)
+    fun delete() = delete(LEGACY_DEFAULT_ID)
+    fun masked(): String = masked(LEGACY_DEFAULT_ID)
+
+    private fun decrypt(iv: String, ct: String, accountId: String?): String? = try {
+        val cipher = Cipher.getInstance(TRANSFORM)
+        cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))
+        String(cipher.doFinal(Base64.decode(ct, Base64.NO_WRAP)), Charsets.UTF_8)
+    } catch (_: Exception) {
+        if (accountId == null) prefs.edit().remove(LEGACY_IV).remove(LEGACY_CT).apply()
+        else delete(accountId)
+        null
+    }
+
+    private fun mask(key: String?): String {
+        val k = key ?: return ""
         return if (k.length <= 8) "••••" else k.take(4) + "••••••••" + k.takeLast(4)
     }
+
+    private fun safeId(id: String) = Base64.encodeToString(id.toByteArray(Charsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+    private fun ivName(id: String) = IV_PREFIX + safeId(id)
+    private fun ctName(id: String) = CT_PREFIX + safeId(id)
 
     private fun secretKey(): SecretKey {
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
@@ -74,7 +110,10 @@ class SecureKeyStore(context: Context) {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val ALIAS = "snapgpt_groq_key"
         const val TRANSFORM = "AES/GCM/NoPadding"
-        const val IV = "iv"
-        const val CT = "ct"
+        const val IV_PREFIX = "api_iv_"
+        const val CT_PREFIX = "api_ct_"
+        const val LEGACY_DEFAULT_ID = "groq-primary"
+        const val LEGACY_IV = "iv"
+        const val LEGACY_CT = "ct"
     }
 }
