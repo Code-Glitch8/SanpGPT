@@ -86,6 +86,14 @@ SnapGPT-Android/
 - Images are resized/JPEG-compressed (Low / Balanced / High); maximum questions per scan and per-stage output caps.
 - Settings > AI shows requests made / successful / failed / cached, **actual** tokens reported by Groq, and **locally estimated** tokens, kept separate.
 
+## GitHub Actions SDK setup note
+
+The Android SDK setup step uses `android-actions/setup-android@v4` and explicitly installs
+only `platform-tools`. Do not add the legacy SDK package named `tools`: Google no longer
+publishes that package, and `sdkmanager tools` fails with `Failed to find package 'tools'`.
+The Android Gradle Plugin downloads the project's required Android platform and build-tools
+packages during the Gradle build after the SDK licenses have been accepted.
+
 ## Build
 Local:
 ```bash
