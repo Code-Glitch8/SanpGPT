@@ -7,14 +7,14 @@ import com.snapgpt.ai.ChatRequest
 import com.snapgpt.ai.ConnectionState
 import com.snapgpt.ai.GroqClient
 import com.snapgpt.ai.GroqRequestBuilder
+import com.snapgpt.ai.HttpResponse
+import com.snapgpt.ai.HttpTransport
 import com.snapgpt.ai.RateLimitGate
-import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -22,44 +22,67 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
-import java.net.InetSocketAddress
+import java.io.IOException
+import java.net.URI
+import java.net.UnknownHostException
 
-/** Runs the real HTTP client against a local mock of Groq's OpenAI-compatible API (no network, no API key). */
+/**
+ * Tests GroqClient through its injectable HTTP transport.
+ * This avoids com.sun.net.httpserver, which is a JDK-only module and is not
+ * part of Android's unit-test compile classpath.
+ */
 class GroqClientTest {
-    private lateinit var server: HttpServer
-    private lateinit var base: String
-    private var status = 200
-    private var responseBody = ""
-    private var responseHeaders = mapOf<String, String>()
-    private var lastAuth: String? = null
-    private var lastBody: String = ""
-    private var lastPath = ""
-    private var hits = 0
+    private class FakeTransport : HttpTransport {
+        var status: Int = 200
+        var responseBody: String = ""
+        var responseHeaders: Map<String, String> = emptyMap()
+        var failure: IOException? = null
 
-    @Before
-    fun start() {
-        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/") { ex ->
+        var lastMethod: String? = null
+        var lastUrl: String? = null
+        var lastAuth: String? = null
+        var lastBody: String? = null
+        var hits: Int = 0
+            private set
+
+        override suspend fun execute(
+            method: String,
+            url: String,
+            headers: Map<String, String>,
+            body: String?,
+            connectTimeoutMs: Int,
+            readTimeoutMs: Int,
+        ): HttpResponse {
             hits++
-            lastAuth = ex.requestHeaders.getFirst("Authorization")
-            lastPath = ex.requestURI.path
-            lastBody = ex.requestBody.readBytes().toString(Charsets.UTF_8)
-            val bytes = responseBody.toByteArray()
-            responseHeaders.forEach { (k, v) -> ex.responseHeaders.add(k, v) }
-            ex.sendResponseHeaders(status, bytes.size.toLong())
-            ex.responseBody.use { it.write(bytes) }
+            lastMethod = method
+            lastUrl = url
+            lastAuth = headers["Authorization"]
+            lastBody = body.orEmpty()
+            failure?.let { throw it }
+            return HttpResponse(
+                status = status,
+                headers = responseHeaders.mapKeys { it.key.lowercase() },
+                body = responseBody,
+            )
         }
-        server.start()
-        base = "http://127.0.0.1:${server.address.port}/openai/v1"
     }
 
-    @After
-    fun stop() = server.stop(0)
+    private lateinit var transport: FakeTransport
+    private val base = "https://mock-groq.invalid/openai/v1"
+
+    @Before
+    fun setUp() {
+        transport = FakeTransport()
+    }
+
+    private fun client() = GroqClient(transport = transport, baseUrl = base)
 
     private fun request(images: List<String> = emptyList(), json: Boolean = true) = ChatRequest(
         model = "qwen/qwen3.8-27b",
         messages = listOf(ChatMessage("system", "sys"), ChatMessage("user", "hello", images)),
-        temperature = 0.5, maxCompletionTokens = 100, jsonMode = json,
+        temperature = 0.5,
+        maxCompletionTokens = 100,
+        jsonMode = json,
     )
 
     private val okBody = """{"choices":[{"message":{"content":"{\"questions\":[]}"},"finish_reason":"stop"}],
@@ -67,22 +90,26 @@ class GroqClientTest {
 
     @Test
     fun sendsAuthorizedImageRequestAndParsesUsage() = runBlocking {
-        responseBody = okBody
-        responseHeaders = mapOf("x-ratelimit-remaining-tokens" to "5000", "x-ratelimit-limit-requests" to "30")
-        val client = GroqClient(baseUrl = base)
-        val res = client.chat("gsk_testkey1234", request(listOf("data:image/jpeg;base64,AAAA")))
+        transport.responseBody = okBody
+        transport.responseHeaders = mapOf(
+            "x-ratelimit-remaining-tokens" to "5000",
+            "x-ratelimit-limit-requests" to "30",
+        )
+        val client = client()
+        val result = client.chat("gsk_testkey1234", request(listOf("data:image/jpeg;base64,AAAA")))
 
-        assertEquals("Bearer gsk_testkey1234", lastAuth)
-        assertEquals("/openai/v1/chat/completions", lastPath)
-        assertEquals("{\"questions\":[]}", res.text)
-        assertEquals(2100, res.usage!!.promptTokens)
-        assertEquals(40, res.usage!!.completionTokens)
-        assertEquals(2140, res.usage!!.totalTokens)
+        assertEquals("Bearer gsk_testkey1234", transport.lastAuth)
+        assertEquals("POST", transport.lastMethod)
+        assertEquals("/openai/v1/chat/completions", URI(transport.lastUrl!!).path)
+        assertEquals("{\"questions\":[]}", result.text)
+        assertEquals(2100, result.usage!!.promptTokens)
+        assertEquals(40, result.usage!!.completionTokens)
+        assertEquals(2140, result.usage!!.totalTokens)
         assertEquals("5000", client.lastRateLimit.remainingTokens)
         assertEquals("30", client.lastRateLimit.limitRequests)
         assertNull(client.lastRateLimit.retryAfter) // not sent => not invented
 
-        val sent = Json.parseToJsonElement(lastBody).jsonObject
+        val sent = Json.parseToJsonElement(transport.lastBody!!).jsonObject
         assertEquals("qwen/qwen3.8-27b", sent["model"]!!.jsonPrimitive.content)
         assertEquals("json_object", sent["response_format"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("hidden", sent["reasoning_format"]!!.jsonPrimitive.content)
@@ -90,7 +117,10 @@ class GroqClientTest {
         val userContent = sent["messages"]!!.jsonArray[1].jsonObject["content"]!!.jsonArray
         assertEquals("text", userContent[0].jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("image_url", userContent[1].jsonObject["type"]!!.jsonPrimitive.content)
-        assertEquals("data:image/jpeg;base64,AAAA", userContent[1].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content)
+        assertEquals(
+            "data:image/jpeg;base64,AAAA",
+            userContent[1].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content,
+        )
     }
 
     @Test
@@ -102,11 +132,11 @@ class GroqClientTest {
 
     @Test
     fun invalidKeyIsMappedAndNeverLeaksKey() = runBlocking {
-        status = 401
-        responseBody = """{"error":{"message":"Invalid API Key gsk_testkey1234","type":"invalid_request_error"}}"""
+        transport.status = 401
+        transport.responseBody = """{"error":{"message":"Invalid API Key gsk_testkey1234","type":"invalid_request_error"}}"""
         try {
-            GroqClient(baseUrl = base).chat("gsk_testkey1234", request())
-            fail()
+            client().chat("gsk_testkey1234", request())
+            fail("Expected invalid-key error")
         } catch (e: AiException) {
             assertEquals(AiErrorCode.INVALID_KEY, e.code)
             assertFalse(e.message!!.contains("gsk_testkey1234"))
@@ -114,81 +144,113 @@ class GroqClientTest {
     }
 
     @Test
-    fun rateLimitHonoursRetryAfterAndBlocksFollowUpRequestsWithoutHittingTheServer() = runBlocking {
-        status = 429
-        responseHeaders = mapOf("retry-after" to "7")
-        responseBody = """{"error":{"message":"Rate limit reached for model on tokens per minute (TPM)","code":"rate_limit_exceeded"}}"""
-        val client = GroqClient(baseUrl = base)
-        try { client.chat("gsk_x1234567", request()); fail() } catch (e: AiException) {
+    fun rateLimitHonoursRetryAfterAndBlocksFollowUpRequestsWithoutSendingAnotherRequest() = runBlocking {
+        transport.status = 429
+        transport.responseHeaders = mapOf("retry-after" to "7")
+        transport.responseBody = """{"error":{"message":"Rate limit reached for model on tokens per minute (TPM)","code":"rate_limit_exceeded"}}"""
+        val client = client()
+        try {
+            client.chat("gsk_x1234567", request())
+            fail("Expected token-limit error")
+        } catch (e: AiException) {
             assertEquals(AiErrorCode.TOKEN_LIMIT, e.code)
             assertEquals(7, e.retryAfterSeconds)
         }
-        val before = hits
-        try { client.chat("gsk_x1234567", request()); fail() } catch (e: AiException) {
+        val before = transport.hits
+        try {
+            client.chat("gsk_x1234567", request())
+            fail("Expected cooldown error")
+        } catch (e: AiException) {
             assertEquals(AiErrorCode.COOLDOWN, e.code)
         }
-        assertEquals(before, hits) // no second HTTP call during the cool-down
+        assertEquals(before, transport.hits) // no second HTTP call during cool-down
     }
 
     @Test
     fun modelUnavailableAndServerErrors() = runBlocking {
-        val client = GroqClient(baseUrl = base)
-        status = 404
-        responseBody = """{"error":{"message":"The model `qwen/qwen3.8-27b` does not exist","code":"model_not_found"}}"""
-        try { client.chat("gsk_k1234567", request()); fail() } catch (e: AiException) {
+        val client = client()
+        transport.status = 404
+        transport.responseBody = """{"error":{"message":"The model `qwen/qwen3.8-27b` does not exist","code":"model_not_found"}}"""
+        try {
+            client.chat("gsk_k1234567", request())
+            fail("Expected model-unavailable error")
+        } catch (e: AiException) {
             assertEquals(AiErrorCode.MODEL_UNAVAILABLE, e.code)
             assertTrue(e.message!!.contains("does not switch models automatically"))
         }
-        status = 503
-        responseBody = "oops"
-        try { client.chat("gsk_k1234567", request()); fail() } catch (e: AiException) {
+        transport.status = 503
+        transport.responseBody = "oops"
+        try {
+            client.chat("gsk_k1234567", request())
+            fail("Expected server error")
+        } catch (e: AiException) {
             assertEquals(AiErrorCode.SERVER, e.code)
         }
-        status = 413
-        try { client.chat("gsk_k1234567", request()); fail() } catch (e: AiException) {
+        transport.status = 413
+        try {
+            client.chat("gsk_k1234567", request())
+            fail("Expected image-too-large error")
+        } catch (e: AiException) {
             assertEquals(AiErrorCode.IMAGE_TOO_LARGE, e.code)
         }
     }
 
     @Test
     fun emptyOrTruncatedReplyIsAnError() = runBlocking {
-        val client = GroqClient(baseUrl = base)
-        responseBody = """{"choices":[{"message":{"content":"<think>long reasoning</think>"},"finish_reason":"length"}]}"""
-        try { client.chat("gsk_k1234567", request()); fail() } catch (e: AiException) {
+        val client = client()
+        transport.responseBody = """{"choices":[{"message":{"content":"<think>long reasoning</think>"},"finish_reason":"length"}]}"""
+        try {
+            client.chat("gsk_k1234567", request())
+            fail("Expected truncated-response error")
+        } catch (e: AiException) {
             assertEquals(AiErrorCode.TRUNCATED, e.code)
         }
     }
 
     @Test
     fun missingKeyAndTooManyImagesAreRejectedBeforeAnyNetworkCall() = runBlocking {
-        val client = GroqClient(baseUrl = base)
-        try { client.chat("  ", request()); fail() } catch (e: AiException) { assertEquals(AiErrorCode.NO_API_KEY, e.code) }
-        val imgs = List(4) { "data:image/jpeg;base64,AA" }
-        try { client.chat("gsk_k1234567", request(imgs)); fail() } catch (e: AiException) { assertEquals(AiErrorCode.IMAGE_UNSUPPORTED, e.code) }
-        assertEquals(0, hits)
+        val client = client()
+        try {
+            client.chat("  ", request())
+            fail("Expected missing-key error")
+        } catch (e: AiException) {
+            assertEquals(AiErrorCode.NO_API_KEY, e.code)
+        }
+        val images = List(4) { "data:image/jpeg;base64,AA" }
+        try {
+            client.chat("gsk_k1234567", request(images))
+            fail("Expected too-many-images error")
+        } catch (e: AiException) {
+            assertEquals(AiErrorCode.IMAGE_UNSUPPORTED, e.code)
+        }
+        assertEquals(0, transport.hits)
     }
 
     @Test
     fun connectionTestReportsConnectedMissingModelAndBadKey() = runBlocking {
-        val client = GroqClient(baseUrl = base)
-        responseBody = """{"data":[{"id":"qwen/qwen3.8-27b"},{"id":"other"}]}"""
+        val client = client()
+        transport.responseBody = """{"data":[{"id":"qwen/qwen3.8-27b"},{"id":"other"}]}"""
         assertEquals(ConnectionState.CONNECTED, client.testConnection("gsk_k1234567", "qwen/qwen3.8-27b").state)
-        assertEquals("/openai/v1/models", lastPath)
+        assertEquals("GET", transport.lastMethod)
+        assertEquals("/openai/v1/models", URI(transport.lastUrl!!).path)
         assertEquals(ConnectionState.MODEL_MISSING, client.testConnection("gsk_k1234567", "nope/model").state)
-        status = 401
-        responseBody = """{"error":{"message":"bad"}}"""
+        transport.status = 401
+        transport.responseBody = """{"error":{"message":"bad"}}"""
         assertEquals(ConnectionState.INVALID_KEY, client.testConnection("gsk_k1234567", "qwen/qwen3.8-27b").state)
     }
 
     @Test
-    fun unreachableServerGivesNetworkError() = runBlocking {
-        server.stop(0)
-        val client = GroqClient(baseUrl = base)
-        try { client.chat("gsk_k1234567", request()); fail() } catch (e: AiException) {
+    fun unreachableTransportGivesNetworkError() = runBlocking {
+        transport.failure = UnknownHostException("mock host is unavailable")
+        val client = client()
+        try {
+            client.chat("gsk_k1234567", request())
+            fail("Expected network error")
+        } catch (e: AiException) {
             assertTrue(e.code == AiErrorCode.NETWORK || e.code == AiErrorCode.TIMEOUT)
         }
         assertEquals(ConnectionState.NETWORK_ERROR, client.testConnection("gsk_k1234567", "m").state)
-        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0) // so @After has something to stop
+        assertEquals(2, transport.hits)
     }
 
     @Test

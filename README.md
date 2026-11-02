@@ -5,7 +5,7 @@ Native AI floating screen assistant for JEE Main / JEE Advanced students. A smal
 Kotlin · Jetpack Compose (Material 3) · WindowManager overlays · MediaProjection · Foreground Service · Coroutines · DataStore · Room · Android Keystore · Groq API. Not a WebView app.
 
 > **Honest build status** — read this first
-> - The pure logic (Groq client, Stage 1 JSON validation, prompts, coordinate mapping, answer placement, token accounting) is covered by 41 unit tests that were compiled and run with a standalone Kotlin compiler, including HTTP tests against a local mock of Groq's API.
+> - Unit tests cover the pure logic (Groq client, Stage 1 JSON validation, prompts, coordinate mapping, answer placement and token accounting). Groq client tests use an injected in-memory HTTP transport, so they do not require a JDK-only HTTP server, live network access or an API key. Run `./gradlew test` to execute them.
 > - The Android layers (Compose UI, overlay windows, MediaProjection capture, Room, Keystore, foreground service) and the Gradle/AGP build **have not been compiled or run** by the author: the authoring environment had no Android SDK and could not reach Maven/Google/Gradle servers.
 > - **No APK has been built and none is included.** The GitHub Actions workflow has been validated for structure only; a live run is still pending. The first run on GitHub may reveal compile errors to fix; see [Troubleshooting](#troubleshooting).
 > - No live Groq request and no on-device test (overlay, capture, permissions, rotation) has been performed. Treat everything on-device as untested until you try it.
@@ -147,7 +147,7 @@ Keep credentials **outside the repository** (`*.jks`, `*.keystore` and `keystore
 - **No answers positioned correctly**: try *Select question area* around a single question.
 
 ## Tests
-`./gradlew test` runs: Stage 1 parsing/validation and box normalisation, prompt content per mode and setting, the Groq client against a local mock server (auth header, image payload, usage, 401/404/413/429/5xx, cool-down, network failure), bubble placement and coordinate mapping, answer formatting, token accounting, image sizing, settings defaults and LaTeX clean-up.
+`./gradlew test` runs: Stage 1 parsing/validation and box normalisation, prompt content per mode and setting, the Groq client using an injected fake HTTP transport (auth header, image payload, usage, 401/404/413/429/5xx, cool-down, network failure), bubble placement and coordinate mapping, answer formatting, token accounting, image sizing, settings defaults and LaTeX clean-up.
 
 Not covered by automated tests (needs a device): floating overlay, dragging and transparency, MediaProjection capture, area selection UI, permission flows, Room, DataStore persistence, Keystore, live Groq calls.
 
