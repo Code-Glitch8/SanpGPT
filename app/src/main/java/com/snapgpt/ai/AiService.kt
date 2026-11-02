@@ -46,7 +46,7 @@ class AiService(
     @Volatile var lastProviderUsed: String = ""
         private set
 
-    fun clearCache() = stage1Cache.clear()
+    fun clearCache() = synchronized(stage1Cache) { stage1Cache.clear() }
 
     /** A newly saved key should not inherit a cooldown caused by the previous key. */
     fun resetAccountCooldown(accountId: String) {
@@ -73,11 +73,13 @@ class AiService(
         val encoded = withContext(Dispatchers.Default) { BitmapCodec.encode(bitmap, s.imageQuality) }
         val accountFingerprint = s.apiAccounts.joinToString(";") { "${it.id}:${it.baseUrl}:${it.model}:${it.enabled}:${it.kind.name}" }
         val cacheKey = listOf(encoded.sha256(), accountFingerprint, s.automaticApiFailover, s.examMode.key, s.syllabusRestriction, s.showChapterTopic, s.maxQuestionsPerScan, scanType).joinToString("|")
-        synchronized(stage1Cache) {
-            stage1Cache[cacheKey]?.let {
-                usage.recordCacheHit()
-                return it.copy(fromCache = true, usage = null)
-            }
+        // Read the cache while holding the monitor, but never call a suspending function
+        // from inside synchronized: Kotlin correctly rejects suspension points in
+        // critical sections. Record the cache hit only after leaving the monitor.
+        val cachedOutcome = synchronized(stage1Cache) { stage1Cache[cacheKey] }
+        if (cachedOutcome != null) {
+            usage.recordCacheHit()
+            return cachedOutcome.copy(fromCache = true, usage = null)
         }
         val messages = listOf(
             ChatMessage("system", Prompts.stage1System(s.jee, s.maxQuestionsPerScan)),
