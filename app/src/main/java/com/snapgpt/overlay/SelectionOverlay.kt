@@ -38,6 +38,17 @@ class SelectionCanvas(context: Context, private val bmp: Bitmap) : View(context)
 
     var onSelectionChanged: ((Boolean) -> Unit)? = null
 
+    /** Confirm-only mode for "scan entire screen": the whole screen is pre-selected and cannot be changed. */
+    var fixedFull = false
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (fixedFull && w > 0 && h > 0) {
+            sx = 0f; sy = 0f; ex = w.toFloat(); ey = h.toFloat()
+            setValid(true)
+        }
+    }
+
     private fun rect() = RectF(min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey))
 
     /** Selection in the screenshot's pixel space (what gets cropped and sent), or null if nothing valid is selected. */
@@ -78,6 +89,7 @@ class SelectionCanvas(context: Context, private val bmp: Bitmap) : View(context)
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (fixedFull) return true
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> { sx = e.x; sy = e.y; ex = e.x; ey = e.y; dragging = true; setValid(false) }
             MotionEvent.ACTION_MOVE -> { ex = e.x.coerceIn(0f, width.toFloat()); ey = e.y.coerceIn(0f, height.toFloat()); invalidate() }
@@ -107,14 +119,19 @@ class SelectionOverlay(private val ctx: Context, private val wm: WindowManager) 
     private var root: FrameLayout? = null
     val isShowing: Boolean get() = root != null
 
-    fun show(frozen: Bitmap, palette: Palette, listener: Listener) {
+    /**
+     * Nothing is sent until the user taps Confirm. [destination] names the account/provider that will receive the image;
+     * [fullScreen] shows the whole frozen screen as the (fixed) selection instead of letting the user drag a rectangle.
+     */
+    fun show(frozen: Bitmap, palette: Palette, listener: Listener, destination: String, fullScreen: Boolean) {
         hide()
         val (w, h) = Screen.realSize(ctx)
         val u = Screen.usableRect(ctx)
-        val canvas = SelectionCanvas(ctx, frozen)
+        val canvas = SelectionCanvas(ctx, frozen).apply { fixedFull = fullScreen }
 
         val hint = TextView(ctx).apply {
-            text = "Drag to select the question area"
+            text = (if (fullScreen) "Send the entire screen to" else "Drag to select. Only the selected area goes to") + "\n" + destination + "\nNothing is sent until you tap Confirm."
+            gravity = Gravity.CENTER
             setTextColor(0xFFFFFFFF.toInt())
             textSize = 14f
             val ph = Screen.dpI(ctx, 16f)
@@ -134,7 +151,7 @@ class SelectionOverlay(private val ctx: Context, private val wm: WindowManager) 
             isClickable = true
         }
         val cancel = button("Cancel", 0xFF3A3947.toInt(), 0xFFFFFFFF.toInt())
-        val confirm = button("Confirm", palette.primary, 0xFFFFFFFF.toInt()).apply { alpha = 0.4f; isEnabled = false }
+        val confirm = button(if (fullScreen) "Confirm and send" else "Confirm", palette.primary, 0xFFFFFFFF.toInt()).apply { alpha = 0.4f; isEnabled = false }
         canvas.onSelectionChanged = { ok -> confirm.isEnabled = ok; confirm.alpha = if (ok) 1f else 0.4f }
         cancel.setOnClickListener { listener.onCancel() }
         confirm.setOnClickListener { canvas.selectionInBitmap()?.let { listener.onConfirm(it) } }

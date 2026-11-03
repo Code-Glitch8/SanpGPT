@@ -1,17 +1,19 @@
 package com.snapgpt.ai
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 
 enum class AiErrorCode {
-    NO_API_KEY, INVALID_KEY, FORBIDDEN, QUOTA, RATE_LIMIT, TOKEN_LIMIT, COOLDOWN, MODEL_UNAVAILABLE, BAD_REQUEST,
+    NO_API_KEY, INVALID_KEY, FORBIDDEN, RATE_LIMIT, TOKEN_LIMIT, QUOTA_EXCEEDED, MODEL_UNAVAILABLE, BAD_REQUEST,
     IMAGE_UNSUPPORTED, IMAGE_TOO_LARGE, NETWORK, TIMEOUT, SERVER, INVALID_RESPONSE, TRUNCATED, CAPTURE, NOT_READY,
+    NO_ACCOUNTS, ALL_ACCOUNTS_FAILED, DUPLICATE,
 }
 
-/** Every failure shown to the user. [message] is user-facing and never contains the API key. */
+/** Every failure shown to the user. [message] is user-facing and never contains an API key. */
 class AiException(
     val code: AiErrorCode,
     message: String,
@@ -20,117 +22,127 @@ class AiException(
 ) : Exception(Scrub.text(message))
 
 object Scrub {
-    private val GROQ_KEY = Regex("gsk_[A-Za-z0-9_-]{6,}")
-    private val GENERIC_KEY = Regex("\\bsk-[A-Za-z0-9_-]{12,}")
+    private val PREFIXED_KEY = Regex("\\b(?:gsk_|sk-or-v1-|sk-ant-|sk-|AIza)[A-Za-z0-9_-]{6,}")
     private val BEARER = Regex("Bearer\\s+[A-Za-z0-9._~+/=-]{8,}", RegexOption.IGNORE_CASE)
+    private val KEY_PARAM = Regex("([?&]key=)[^&\\s\"']+", RegexOption.IGNORE_CASE)
 
     /** Remove anything that looks like an API key before text is stored, shown or logged. */
     fun text(s: String?): String = (s ?: "")
-        .replace(GROQ_KEY, "[redacted]")
-        .replace(GENERIC_KEY, "[redacted]")
+        .replace(PREFIXED_KEY, "[redacted]")
         .replace(BEARER, "Bearer [redacted]")
+        .replace(KEY_PARAM, "$1[redacted]")
 }
 
-/** Maps HTTP failures from an OpenAI-compatible API endpoint to understandable [AiException]s. */
-object GroqErrorMapper {
+/** Reads "try again in 21m1.2s" style hints that some providers put in error text instead of a Retry-After header. */
+object RetryHint {
+    private val PHRASE = Regex("(?:try again|retry)\\s+in\\s+((?:\\d+(?:\\.\\d+)?\\s*(?:ms|h|m|s)\\s*)+)", RegexOption.IGNORE_CASE)
+    private val PART = Regex("(\\d+(?:\\.\\d+)?)\\s*(ms|h|m|s)", RegexOption.IGNORE_CASE)
+
+    fun fromText(text: String): Int? {
+        val m = PHRASE.find(text) ?: return null
+        var seconds = 0.0
+        PART.findAll(m.groupValues[1]).forEach {
+            val v = it.groupValues[1].toDouble()
+            seconds += when (it.groupValues[2].lowercase()) { "h" -> v * 3600; "m" -> v * 60; "ms" -> v / 1000; else -> v }
+        }
+        return if (seconds > 0) Math.ceil(seconds).toInt() else null
+    }
+
+    /** Gemini: error.details[].retryDelay = "34s". */
+    fun fromDelayString(s: String): Int? = PART.findAll(s).sumOf {
+        val v = it.groupValues[1].toDouble()
+        when (it.groupValues[2].lowercase()) { "h" -> v * 3600; "m" -> v * 60; "ms" -> v / 1000; else -> v }
+    }.let { if (it > 0) Math.ceil(it).toInt() else null }
+}
+
+/** Maps HTTP failures from any provider to understandable [AiException]s that the failover manager can classify. */
+object ErrorMapper {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    fun apiMessage(body: String): String? = try {
-        val root = json.parseToJsonElement(body).jsonObject
-        val err = root["error"]
-        when (err) {
+    private fun root(body: String): JsonObject? = try { json.parseToJsonElement(body).jsonObject } catch (_: Exception) { null }
+
+    fun apiMessage(body: String): String? {
+        val err = root(body)?.get("error")
+        return when (err) {
             is JsonObject -> (err["message"] as? JsonPrimitive)?.contentOrNull
             is JsonPrimitive -> err.contentOrNull
             else -> null
         }
-    } catch (_: Exception) {
-        null
     }
 
-    fun apiCode(body: String): String? = try {
-        ((json.parseToJsonElement(body).jsonObject["error"] as? JsonObject)?.get("code") as? JsonPrimitive)?.contentOrNull
-    } catch (_: Exception) {
-        null
+    fun apiCode(body: String): String? {
+        val err = root(body)?.get("error") as? JsonObject ?: return null
+        val c = (err["code"] as? JsonPrimitive)?.contentOrNull ?: (err["type"] as? JsonPrimitive)?.contentOrNull
+        return c
     }
 
-    fun map(status: Int, body: String, retryAfterSeconds: Int?, model: String, providerName: String = "API provider"): AiException {
+    /** Gemini puts a machine-readable retry delay and quota ids in error.details. */
+    private fun detailsText(body: String): Pair<Int?, String> {
+        val details = ((root(body)?.get("error") as? JsonObject)?.get("details") as? JsonArray) ?: return null to ""
+        var retry: Int? = null
+        val sb = StringBuilder()
+        details.forEach { d ->
+            val o = d as? JsonObject ?: return@forEach
+            (o["retryDelay"] as? JsonPrimitive)?.contentOrNull?.let { retry = RetryHint.fromDelayString(it) }
+            sb.append(o.toString().take(1500)).append(' ')
+        }
+        return retry to sb.toString()
+    }
+
+    fun map(provider: String, status: Int, body: String, retryAfterSeconds: Int?, model: String): AiException {
         val detail = Scrub.text(apiMessage(body)?.take(300) ?: "")
-        val code = apiCode(body).orEmpty()
+        val code = apiCode(body).orEmpty().lowercase()
         val lower = detail.lowercase()
+        val (detailRetry, detailBlob) = detailsText(body)
+        val blob = (lower + " " + detailBlob.lowercase())
+        val retry = retryAfterSeconds ?: detailRetry ?: RetryHint.fromText(detail)
+
+        val keyProblem = blob.contains("api key not valid") || blob.contains("api_key_invalid") || blob.contains("invalid api key") ||
+            blob.contains("incorrect api key") || blob.contains("invalid x-api-key") || blob.contains("invalid_api_key") ||
+            code.contains("authentication") || code == "invalid_api_key"
+        val billing = blob.contains("credit balance") || blob.contains("insufficient credit") || blob.contains("insufficient_quota") ||
+            blob.contains("insufficient funds") || blob.contains("billing") && !blob.contains("api key") || blob.contains("exceeded your current quota") ||
+            blob.contains("payment required")
+        val perDay = blob.contains("per day") || blob.contains("perday") || blob.contains("(tpd)") || blob.contains("(rpd)") || blob.contains("daily") ||
+            blob.contains("per month") || blob.contains("permonth")
+        val perMinute = blob.contains("per minute") || blob.contains("perminute") || blob.contains("(tpm)") || blob.contains("(rpm)")
+        val tokenLimit = blob.contains("token") || blob.contains("tpm") || blob.contains("tpd")
+        val imageProblem = blob.contains("image") || blob.contains("vision") || blob.contains("multimodal")
+        val imageNotSupported = imageProblem && (blob.contains("not support") || blob.contains("does not support") || blob.contains("cannot process") ||
+            blob.contains("only text") || blob.contains("text-only") || blob.contains("support image") || blob.contains("no endpoints found") || blob.contains("unsupported"))
+        val p = provider
+
         return when {
-            status == 401 -> AiException(AiErrorCode.INVALID_KEY, "$providerName rejected the API key (HTTP 401). Check or re-enter this account key in SnapGPT > Settings > AI APIs.", httpStatus = status)
-            status == 402 || (status in 400..499 && (lower.contains("insufficient_quota") || lower.contains("quota exceeded") || lower.contains("credits exhausted") || lower.contains("billing limit"))) ->
-                AiException(AiErrorCode.QUOTA, "$providerName quota or credits are exhausted." + suffix(detail), retryAfterSeconds, status)
-            status == 403 -> AiException(AiErrorCode.FORBIDDEN, "$providerName refused the request (HTTP 403)." + suffix(detail) + " Your account, organization or region may not be allowed to use this model.", httpStatus = status)
-            status == 404 || code == "model_not_found" || lower.contains("does not exist") && lower.contains("model") ->
-                AiException(AiErrorCode.MODEL_UNAVAILABLE, "The model \"$model\" is not available for this API account." + suffix(detail) + " SnapGPT does not switch models automatically; pick another model in Settings > AI.", httpStatus = status)
-            status == 413 -> AiException(AiErrorCode.IMAGE_TOO_LARGE, "The screenshot is too large for this API (SnapGPT request budget is 18 MB). Lower the image quality in Settings > Scanning or select a smaller area.", httpStatus = status)
-            status == 429 -> {
-                val errorHints = "$lower ${code.lowercase()}"
-                val quotaExhausted = errorHints.contains("quota") || errorHints.contains("billing") || errorHints.contains("credits exhausted") || errorHints.contains("insufficient_credit")
-                if (quotaExhausted) return AiException(AiErrorCode.QUOTA, "$providerName quota or credits are exhausted.", retryAfterSeconds, status)
-                val tokenLimit = errorHints.contains("token") || errorHints.contains("tpm") || errorHints.contains("tpd")
-                val wait = retryAfterSeconds?.let { " Try again in about $it s." } ?: " Try again shortly."
-                if (tokenLimit) AiException(AiErrorCode.TOKEN_LIMIT, "$providerName token quota or rate limit reached.$wait", retryAfterSeconds, status)
-                else AiException(AiErrorCode.RATE_LIMIT, "$providerName request rate limit reached.$wait", retryAfterSeconds, status)
+            status == 401 || keyProblem && status in 400..403 ->
+                AiException(AiErrorCode.INVALID_KEY, "$p rejected the API key (HTTP $status). Check or re-enter the key for this account.", httpStatus = status)
+            status == 402 || billing && status in 400..429 && !(status == 429 && perMinute && !perDay) ->
+                AiException(AiErrorCode.QUOTA_EXCEEDED, "$p reports that the quota, credits or billing limit for this account is used up (HTTP $status)." + suffix(detail), retry, status)
+            status == 403 ->
+                AiException(AiErrorCode.FORBIDDEN, "$p refused the request (HTTP 403)." + suffix(detail) + " The key, organization or region may not be allowed to use this model.", httpStatus = status)
+            status == 404 || code == "model_not_found" || lower.contains("does not exist") && lower.contains("model") || lower.contains("no endpoints found") && !imageNotSupported ->
+                AiException(AiErrorCode.MODEL_UNAVAILABLE, "The model \"$model\" is not available for this $p account." + suffix(detail) + " SnapGPT does not switch models automatically; pick another model for this account.", httpStatus = status)
+            status == 413 -> AiException(AiErrorCode.IMAGE_TOO_LARGE, "The screenshot is too large for $p. Lower the image quality in Settings > Screenshot or select a smaller area.", httpStatus = status)
+            status == 429 -> when {
+                perDay -> AiException(AiErrorCode.QUOTA_EXCEEDED, "$p daily/monthly quota reached." + (retry?.let { " It may reset in about ${formatWait(it)}." } ?: ""), retry, status)
+                tokenLimit -> AiException(AiErrorCode.TOKEN_LIMIT, "$p token rate limit reached." + waitText(retry), retry, status)
+                else -> AiException(AiErrorCode.RATE_LIMIT, "$p request rate limit reached." + waitText(retry), retry, status)
             }
-            status == 400 && (lower.contains("decommission") || lower.contains("no longer supported") || lower.contains("model")) && !lower.contains("image") ->
-                AiException(AiErrorCode.MODEL_UNAVAILABLE, "$providerName says the model \"$model\" cannot be used:$detail", httpStatus = status)
-            status == 400 && lower.contains("image") ->
-                AiException(AiErrorCode.IMAGE_UNSUPPORTED, "$providerName could not accept the image:$detail", httpStatus = status)
-            status in 400..499 -> AiException(AiErrorCode.BAD_REQUEST, "$providerName rejected the request (HTTP $status)." + suffix(detail), httpStatus = status)
-            status >= 500 -> AiException(AiErrorCode.SERVER, "$providerName had a server problem (HTTP $status). Please try again in a moment.", httpStatus = status)
-            else -> AiException(AiErrorCode.BAD_REQUEST, "Unexpected response from $providerName (HTTP $status).", httpStatus = status)
+            status == 400 && imageNotSupported -> AiException(AiErrorCode.IMAGE_UNSUPPORTED, "The model \"$model\" on $p does not accept images:$detail", httpStatus = status)
+            status == 400 && (lower.contains("decommission") || lower.contains("no longer supported") || lower.contains("model") && !imageProblem && (lower.contains("not found") || lower.contains("invalid") || lower.contains("unavailable"))) ->
+                AiException(AiErrorCode.MODEL_UNAVAILABLE, "$p says the model \"$model\" cannot be used:$detail SnapGPT does not switch models automatically.", httpStatus = status)
+            status == 408 || status == 504 -> AiException(AiErrorCode.TIMEOUT, "$p timed out (HTTP $status). Please try again in a moment.", httpStatus = status)
+            status == 529 || status >= 500 -> AiException(AiErrorCode.SERVER, "$p had a temporary server problem (HTTP $status).", retry, status)
+            status in 400..499 -> AiException(AiErrorCode.BAD_REQUEST, "$p rejected the request (HTTP $status)." + suffix(detail), httpStatus = status)
+            else -> AiException(AiErrorCode.BAD_REQUEST, "Unexpected response from $p (HTTP $status).", httpStatus = status)
         }
     }
 
     private fun suffix(detail: String) = if (detail.isBlank()) "" else " $detail"
-}
+    private fun waitText(retry: Int?) = retry?.let { " Try again in about ${formatWait(it)}." } ?: " Try again shortly."
 
-/** Refuses requests to a particular account until its reported rate-limit wait has passed. */
-class RateLimitGate(private val providerName: String = "API provider", private val clock: () -> Long = { System.currentTimeMillis() }) {
-    @Volatile
-    private var blockedUntil = 0L
-
-    fun block(seconds: Int) {
-        blockedUntil = clock() + seconds.coerceIn(1, 3600) * 1000L
-    }
-
-    fun reset() { blockedUntil = 0L }
-
-    fun remainingSeconds(): Int {
-        val ms = blockedUntil - clock()
-        return if (ms <= 0) 0 else ((ms + 999) / 1000).toInt()
-    }
-
-    fun check() {
-        val s = remainingSeconds()
-        if (s > 0) throw AiException(AiErrorCode.COOLDOWN, "$providerName asked SnapGPT to wait. Try again in $s s.", s)
-    }
-}
-
-/** Central policy so every AI stage (scan, explain and follow-up) uses the same bounded fallback rules. */
-object ApiFailoverPolicy {
-    fun shouldTryNext(code: AiErrorCode): Boolean = when (code) {
-        AiErrorCode.QUOTA,
-        AiErrorCode.RATE_LIMIT,
-        AiErrorCode.TOKEN_LIMIT,
-        AiErrorCode.COOLDOWN,
-        AiErrorCode.INVALID_KEY,
-        AiErrorCode.FORBIDDEN,
-        AiErrorCode.MODEL_UNAVAILABLE,
-        AiErrorCode.NETWORK,
-        AiErrorCode.TIMEOUT,
-        AiErrorCode.SERVER,
-        AiErrorCode.INVALID_RESPONSE -> true
-        // These are usually request/user/configuration problems. Repeating them against every account
-        // would waste quota and cannot make the same screenshot/request valid.
-        AiErrorCode.NO_API_KEY,
-        AiErrorCode.BAD_REQUEST,
-        AiErrorCode.IMAGE_UNSUPPORTED,
-        AiErrorCode.IMAGE_TOO_LARGE,
-        AiErrorCode.TRUNCATED,
-        AiErrorCode.CAPTURE,
-        AiErrorCode.NOT_READY -> false
+    fun formatWait(seconds: Int): String = when {
+        seconds < 90 -> "$seconds s"
+        seconds < 5400 -> "${(seconds + 30) / 60} min"
+        else -> "${(seconds + 1800) / 3600} h"
     }
 }

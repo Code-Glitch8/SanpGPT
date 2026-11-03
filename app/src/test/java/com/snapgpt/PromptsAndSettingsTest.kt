@@ -9,7 +9,9 @@ import com.snapgpt.ai.QuestionTypes
 import com.snapgpt.ai.Scrub
 import com.snapgpt.ai.TokenEstimator
 import com.snapgpt.ai.TokenUsage
-import com.snapgpt.ai.UsageStats
+import com.snapgpt.ai.providers.AccountStats
+import com.snapgpt.ai.providers.RequestKind
+import com.snapgpt.ai.DetailIntent
 import com.snapgpt.capture.ImageQuality
 import com.snapgpt.capture.ImageSizing
 import com.snapgpt.jee.ExamMode
@@ -32,8 +34,11 @@ class PromptsAndSettingsTest {
     @Test
     fun defaultsMatchTheProductSpec() {
         val s = AppSettings()
-        assertEquals(AiDefaults.DEFAULT_MODEL, s.model)
-        assertEquals("qwen/qwen3.8-27b", s.model)
+        assertEquals("qwen/qwen3.8-27b", AiDefaults.DEFAULT_MODEL)
+        assertTrue(s.autoFailover)
+        assertEquals(2, s.maxRetriesPerAccount)
+        assertTrue(s.verificationEnabled)
+        assertTrue(s.verifyDifferentAccount)
         assertEquals(52, s.circleSizeDp)
         assertTrue(s.idleOpacityPercent in 25..35)
         assertTrue(s.syllabusRestriction)
@@ -107,18 +112,32 @@ class PromptsAndSettingsTest {
     }
 
     @Test
-    fun usageSeparatesActualFromEstimated() {
-        var u = UsageStats()
-        u = u.recordSuccess(TokenUsage(2100, 40, 2140), 2200, 50)
-        u = u.recordSuccess(null, 300, 20) // no usage object returned: only an estimate
-        u = u.recordFailure(2048)
-        u = u.recordCacheHit()
-        assertEquals(3, u.requests); assertEquals(2, u.successes); assertEquals(1, u.failures); assertEquals(1, u.cacheHits)
+    fun usageSeparatesActualFromEstimatedAndCountsPerKind() {
+        var u = AccountStats()
+        u = u.recordSuccess(RequestKind.ANALYSIS, TokenUsage(2100, 40, 2140), 2200, 50)
+        u = u.recordSuccess(RequestKind.VERIFICATION, null, 300, 20) // no usage object returned: only an estimate
+        u = u.recordFailure(RequestKind.EXPLANATION, quota = true, actual = null, estimatedInput = 2048)
+        assertEquals(3, u.requests); assertEquals(2, u.successes); assertEquals(1, u.failures); assertEquals(1, u.quotaErrors)
+        assertEquals(1, u.analysisRequests); assertEquals(1, u.verificationRequests); assertEquals(1, u.explanationRequests); assertEquals(0, u.followUpRequests)
         assertEquals(2100L, u.actualInputTokens); assertEquals(40L, u.actualOutputTokens); assertEquals(2140L, u.actualTotalTokens)
         assertEquals(2200L + 300L + 2048L, u.estimatedInputTokens)
         assertEquals(70L, u.estimatedOutputTokens)
         assertEquals(u.estimatedInputTokens + u.estimatedOutputTokens, u.estimatedTotalTokens)
         assertEquals(TokenUsage(3, 5, 8), TokenUsage(1, 2, 3) + TokenUsage(2, 3, 5))
+        assertEquals(6, (u + u).requests)
+    }
+
+    @Test
+    fun briefIsTheDefaultAndDetailOnlyOnExplicitRequest() {
+        val brief = Prompts.stage2System(JeeConfig(), detailed = false)
+        assertTrue(brief.contains("BRIEF") && brief.contains("FINAL ANSWER") && brief.contains("FORMULA") && brief.contains("EXPLANATION"))
+        assertFalse(brief.contains("SOLUTION: numbered steps"))
+        assertTrue(Prompts.stage2System(JeeConfig(), detailed = true).contains("SOLUTION: numbered steps"))
+        assertTrue(Prompts.followUpSystem(JeeConfig()).contains("concisely"))
+        assertTrue(Prompts.followUpSystem(JeeConfig(), detailed = true).contains("SOLUTION: numbered steps"))
+        listOf("Give a detailed answer", "Explain in detail", "Show all steps", "Explain from basics", "Derive the formula", "explain step by step")
+            .forEach { assertTrue(it, DetailIntent.isDetailed(it)) }
+        listOf("Why is it B?", "What is the unit of g?", "ok thanks", "Is option C wrong?").forEach { assertFalse(it, DetailIntent.isDetailed(it)) }
     }
 
     @Test
@@ -143,6 +162,10 @@ class PromptsAndSettingsTest {
     fun keysAreScrubbedFromText() {
         assertFalse(Scrub.text("bad key gsk_abcDEF123456 here").contains("gsk_abcDEF123456"))
         assertFalse(Scrub.text("Authorization: Bearer abcdef1234567890").contains("abcdef1234567890"))
+        assertFalse(Scrub.text("bad sk-ant-api03-ABCDEFGHIJKLMNOP").contains("ABCDEFGHIJKLMNOP"))
+        assertFalse(Scrub.text("key AIzaSyA1234567890abcdef rejected").contains("A1234567890abcdef"))
+        assertFalse(Scrub.text("sk-or-v1-0123456789abcdef0123").contains("0123456789abcdef"))
+        assertFalse(Scrub.text("https://x/y?key=SECRETVALUE123&alt=json").contains("SECRETVALUE123"))
     }
 
     @Test

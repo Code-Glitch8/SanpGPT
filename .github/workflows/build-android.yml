@@ -33,10 +33,7 @@ jobs:
           java-version: "17"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          # Do not request the removed legacy SDK package named 'tools'.
-          packages: 'platform-tools'
+        uses: android-actions/setup-android@v3
 
       - name: Set up Gradle (with caching)
         uses: gradle/actions/setup-gradle@v4
@@ -44,16 +41,13 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Run unit tests
-        run: ./gradlew test --stacktrace
+      - name: Run unit tests and build the debug APK
+        run: ./gradlew test assembleDebug --stacktrace
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
-
-      - name: Upload debug APK
+      - name: Upload the APK (one APK for every provider)
         uses: actions/upload-artifact@v4
         with:
-          name: SnapGPT-Android-Debug-APK
+          name: SnapGPT-Android-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30

@@ -23,6 +23,7 @@ interface OverlayCallbacks {
     fun onCopyAnswer()
     fun onCopyExplanation()
     fun onRegenerate()
+    fun onDetailed()
     fun onFollowUp(text: String)
 }
 
@@ -40,6 +41,7 @@ class OverlayManager(private val service: Context, private val cb: OverlayCallba
     private val answers = AnswerLayer(themed, wm)
     private val selection = SelectionOverlay(themed, wm)
     private val panel = ExplanationPanel(themed, wm)
+    private val status = StatusPill(themed, wm)
 
     private fun palette() = resolvePalette(themed, settings.theme)
 
@@ -84,17 +86,18 @@ class OverlayManager(private val service: Context, private val cb: OverlayCallba
         menu.setCaptureHidden(hidden)
         answers.setCaptureHidden(hidden)
         panel.setCaptureHidden(hidden)
+        status.setCaptureHidden(hidden)
     }
 
     // ---- area selection
 
-    fun showSelection(frozen: Bitmap) {
+    fun showSelection(frozen: Bitmap, destination: String, fullScreen: Boolean) {
         menu.dismiss(notify = false)
         bubble.setCaptureHidden(true)
         selection.show(frozen, palette(), object : SelectionOverlay.Listener {
             override fun onConfirm(rect: FRect) = cb.onAreaConfirmed(rect)
             override fun onCancel() = cb.onAreaCancelled()
-        })
+        }, destination, fullScreen)
     }
 
     fun hideSelection() {
@@ -123,6 +126,7 @@ class OverlayManager(private val service: Context, private val cb: OverlayCallba
             override fun onCopyAnswer() = cb.onCopyAnswer()
             override fun onCopyExplanation() = cb.onCopyExplanation()
             override fun onRegenerate() = cb.onRegenerate()
+            override fun onDetailed() = cb.onDetailed()
             override fun onFollowUp(text: String) = cb.onFollowUp(text)
         })
         panel.setTitle(title)
@@ -130,8 +134,15 @@ class OverlayManager(private val service: Context, private val cb: OverlayCallba
 
     fun setPanelBody(text: String, scrollToEnd: Boolean = false) = panel.setBody(MarkdownLite.render(text, palette().accent), scrollToEnd)
     fun setPanelBusy(busy: Boolean) = panel.setBusy(busy)
+    fun setPanelVerification(text: String?, uncertain: Boolean) = panel.setVerification(text, uncertain)
+    fun setPanelDetailedAvailable(available: Boolean) = panel.setDetailedAvailable(available)
     fun clearPanelInput() = panel.clearInput()
     fun hidePanel() = panel.hide()
+
+    // ---- status messages (failover narration)
+
+    fun showStatus(text: String, autoHideMs: Long = 0) = status.show(text, palette(), autoHideMs)
+    fun hideStatus() = status.hide()
 
     // ---- misc
 
@@ -155,6 +166,7 @@ class OverlayManager(private val service: Context, private val cb: OverlayCallba
         selection.hide()
         answers.clear()
         panel.hide()
+        status.hide()
         bubble.hide()
     }
 }

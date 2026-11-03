@@ -38,6 +38,7 @@ class ExplanationPanel(private val ctx: Context, private val wm: WindowManager) 
         fun onCopyAnswer()
         fun onCopyExplanation()
         fun onRegenerate()
+        fun onDetailed()
         fun onFollowUp(text: String)
     }
 
@@ -45,9 +46,12 @@ class ExplanationPanel(private val ctx: Context, private val wm: WindowManager) 
     private var lp: WindowManager.LayoutParams? = null
     private var palette: Palette = Palette(false)
     private lateinit var titleView: TextView
+    private lateinit var verifyView: TextView
+    private lateinit var detailed: TextView
     private lateinit var body: TextView
     private lateinit var scroll: ScrollView
     private lateinit var actions: LinearLayout
+    private lateinit var actionsScroll: android.widget.HorizontalScrollView
     private lateinit var footer: LinearLayout
     private lateinit var input: EditText
     private lateinit var collapse: TextView
@@ -75,6 +79,18 @@ class ExplanationPanel(private val ctx: Context, private val wm: WindowManager) 
 
     fun setTitle(title: String) { if (root != null) titleView.text = title }
 
+    /** One line under the title: verification status and note. Amber when the answer should be treated with caution. */
+    fun setVerification(text: String?, uncertain: Boolean) {
+        if (root == null) return
+        if (text.isNullOrBlank()) { verifyView.visibility = View.GONE; return }
+        verifyView.text = text
+        verifyView.setTextColor(if (uncertain) palette.warning else palette.onSurfaceMuted)
+        verifyView.visibility = View.VISIBLE
+    }
+
+    /** The "Detailed solution" chip is hidden once the full step-by-step answer is already shown. */
+    fun setDetailedAvailable(available: Boolean) { if (root != null) detailed.visibility = if (available) View.VISIBLE else View.GONE }
+
     fun setBody(text: CharSequence, scrollToEnd: Boolean = false) {
         if (root == null) return
         body.text = text
@@ -85,6 +101,7 @@ class ExplanationPanel(private val ctx: Context, private val wm: WindowManager) 
         busy = b
         if (root == null) return
         regenerate.alpha = if (b) 0.4f else 1f
+        detailed.alpha = if (b) 0.4f else 1f
         ask.alpha = if (b) 0.4f else 1f
     }
 
@@ -159,6 +176,13 @@ class ExplanationPanel(private val ctx: Context, private val wm: WindowManager) 
         attachDrag(header)
         r.addView(header, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
+        verifyView = TextView(ctx).apply {
+            textSize = 12f
+            visibility = View.GONE
+            setPadding(dp(16f), 0, dp(16f), dp(4f))
+        }
+        r.addView(verifyView, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+
         // Body
         body = TextView(ctx).apply {
             textSize = 14.5f
@@ -179,7 +203,11 @@ class ExplanationPanel(private val ctx: Context, private val wm: WindowManager) 
         actions.addView(chip("Copy steps") { listener?.onCopyExplanation() }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = gap })
         regenerate = chip("Regenerate") { if (!busy) listener?.onRegenerate() }
         actions.addView(regenerate, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = gap })
-        r.addView(actions, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        detailed = chip("Detailed solution") { if (!busy) listener?.onDetailed() }
+        actions.addView(detailed, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = gap })
+        // Four chips can be wider than a narrow panel, so the row scrolls sideways instead of clipping.
+        actionsScroll = android.widget.HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false; addView(actions) }
+        r.addView(actionsScroll, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
         // Follow-up input
         footer = LinearLayout(ctx).apply {
@@ -248,7 +276,7 @@ class ExplanationPanel(private val ctx: Context, private val wm: WindowManager) 
         expanded = !expanded
         val vis = if (expanded) View.VISIBLE else View.GONE
         scroll.visibility = vis
-        actions.visibility = vis
+        actionsScroll.visibility = vis
         footer.visibility = vis
         collapse.text = if (expanded) "–" else "+"
         if (!expanded) disableInput()

@@ -49,13 +49,13 @@ class SessionController(private val c: AppContainer, private val sessionId: Long
         }
     }
 
-    fun explain(q: StoredQuestion) {
+    fun explain(q: StoredQuestion, detailed: Boolean = false) {
         if (q.rowId in _busy.value) return
         scope.launch {
             _busy.update { it + q.rowId }
             _errors.update { it - q.rowId }
             try {
-                val out = c.ai.explain(q.question, null)
+                val out = c.ai.explain(q.question, null, detailed) { }
                 _explanations.update { it + (q.rowId to out.text) }
                 c.history.saveExplanation(q.rowId, out.text)
                 c.history.addTokens(sessionId, out.usage)
@@ -79,7 +79,7 @@ class SessionController(private val c: AppContainer, private val sessionId: Long
             _errors.update { it - q.rowId }
             try {
                 val history = _chats.value[q.rowId].orEmpty()
-                val out = c.ai.followUp(q.question, explanation, history, text.trim(), null)
+                val out = c.ai.followUp(q.question, explanation, history, text.trim(), null) { }
                 val updated = history + ChatMessage("user", text.trim()) + ChatMessage("assistant", out.text)
                 _chats.update { it + (q.rowId to updated) }
                 c.history.addMessage(q.rowId, "user", text.trim())

@@ -109,7 +109,7 @@ class HistoryRepository(private val context: Context, private val db: SnapDataba
         examLevel = examLevel, questionType = questionType, answer = answer, answerType = answerType, confidence = confidence,
         boxX = boundingBox?.x, boxY = boundingBox?.y, boxW = boundingBox?.width, boxH = boundingBox?.height,
         needsClarification = needsClarification, hasFigure = hasFigure, optionsJson = optionsToJson(options), note = note,
-        explanation = explanation,
+        explanation = explanation, verification = verification.name, verificationNote = verificationNote, originalAnswer = originalAnswer,
     )
 
     private fun QuestionEntity.toQuestion(): DetectedQuestion {
@@ -118,6 +118,8 @@ class HistoryRepository(private val context: Context, private val db: SnapDataba
             id = qid, questionText = questionText, subject = subject, chapter = chapter, topic = topic, examLevel = examLevel,
             questionType = questionType, answer = answer, answerType = answerType, confidence = confidence, boundingBox = box,
             needsClarification = needsClarification, options = optionsFromJson(optionsJson), hasFigure = hasFigure, note = note,
+            verification = com.snapgpt.ai.VerificationStatus.entries.firstOrNull { it.name == verification } ?: com.snapgpt.ai.VerificationStatus.NOT_RUN,
+            verificationNote = verificationNote, originalAnswer = originalAnswer,
         )
     }
 

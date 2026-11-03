@@ -13,6 +13,7 @@ import com.snapgpt.ai.ChatMessage
 import com.snapgpt.ai.DetectedQuestion
 import com.snapgpt.ai.ScanType
 import com.snapgpt.ai.TokenUsage
+import com.snapgpt.ai.VerificationStatus
 import com.snapgpt.capture.BitmapCodec
 import com.snapgpt.capture.ConsentActivity
 import com.snapgpt.capture.ScreenCaptureManager
@@ -50,6 +51,7 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
     private var explainJob: Job? = null
     private var pendingAfterConsent: (() -> Unit)? = null
     private var pendingShot: Bitmap? = null
+    private var pendingType = ScanType.FULL_SCREEN
     private var activeQuestionId: String? = null
     private var bubbleHidden = false
 
@@ -158,10 +160,11 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
     private suspend fun runScan(type: ScanType) {
         try {
             settings = container.settings.current()
-            val hasEnabledAccount = settings.apiAccounts.any { it.enabled && container.keyStore.hasKey(it.id) }
-            if (!hasEnabledAccount) {
-                throw AiException(AiErrorCode.NO_API_KEY, "No enabled API key yet. Open SnapGPT > Settings > AI APIs and add or enable one.")
-            }
+            // The screenshot goes to the first account that is enabled, has a key, is not cooling down and takes images.
+            val destination = container.ai.screenshotDestination() ?: throw AiException(
+                AiErrorCode.NO_ACCOUNTS,
+                "No API account can receive a screenshot right now. Open SnapGPT > Settings > API Accounts and add, enable or test an account whose model accepts images (accounts in a cooldown are skipped until it ends).",
+            )
             overlay.clearAnswers()
             val shot = grabCleanScreenshot()
             if (BitmapCodec.looksBlank(shot)) {
@@ -169,12 +172,10 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
                 overlay.toast("The screen came back blank. The app in front probably blocks screenshots (protected content). Android does not allow capturing it, and SnapGPT does not try to bypass that.")
                 return
             }
-            if (type == ScanType.AREA) {
-                pendingShot = shot
-                overlay.showSelection(shot) // Stage 1 continues in onAreaConfirmed()
-                return
-            }
-            analyze(shot, FRect(0f, 0f, shot.width.toFloat(), shot.height.toFloat()), ScanType.FULL_SCREEN)
+            // Nothing is uploaded yet: the frozen frame stays in memory until the user taps Confirm (Cancel sends nothing).
+            pendingShot = shot
+            pendingType = type
+            overlay.showSelection(shot, destination.destinationLabel(), fullScreen = type == ScanType.FULL_SCREEN) // continues in onAreaConfirmed()
         } catch (e: CancellationException) {
             throw e
         } catch (e: AiException) {
@@ -210,17 +211,20 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         val shot = pendingShot ?: return
         pendingShot = null
         overlay.hideSelection()
+        val type = pendingType
         scanJob = scope.launch {
             try {
                 val cropped = BitmapCodec.crop(shot, rect)
                 val region = FRect(rect.left, rect.top, rect.left + cropped.width, rect.top + cropped.height)
                 if (cropped !== shot) shot.recycle()
-                analyze(cropped, region, ScanType.AREA) // Only the selected region is sent to the selected API account.
+                analyze(cropped, region, type) // Only the confirmed region is sent, and only to the provider shown on the card.
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AiException) {
+                overlay.hideStatus()
                 overlay.toast(e.message ?: "Scan failed.")
             } catch (e: Exception) {
+                overlay.hideStatus()
                 overlay.toast("Scan failed (${e.javaClass.simpleName}). Please try again.")
             } finally {
                 overlay.setBusy(false)
@@ -230,7 +234,8 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
 
     private suspend fun analyze(shot: Bitmap, region: FRect, type: ScanType) {
         overlay.setBusy(true)
-        val outcome = container.ai.stage1(shot, type)
+        val outcome = container.ai.analyze(shot, type) { overlay.showStatus(it) }
+        overlay.showStatus("Answer generated using ${outcome.accountName}." + if (outcome.verificationRan) " Verification finished." else "", 3000)
         val live = LiveSession(System.currentTimeMillis(), type, region, shot)
         outcome.usage?.let { live.usage = it }
         outcome.questions.forEach { live.questions += LiveQuestion(it) }
@@ -240,6 +245,7 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         overlay.hidePanel()
 
         if (outcome.questions.isEmpty()) {
+            overlay.hideStatus()
             overlay.toast("No questions were found on the screen.")
             return
         }
@@ -250,14 +256,13 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
             AnswerItem(q.id, AnswerFormatter.bubbleText(q), AnswerFormatter.isUncertain(q), rect)
         }
         overlay.showAnswers(items)
-        if (outcome.fromCache) overlay.toast("Same screen as your last scan: answered from the local cache (no tokens used).")
-        else {
-            val status = outcome.warnings.firstOrNull() ?: "Answered using ${outcome.providerUsed}."
-            overlay.toast(status)
-        }
+        val corrected = outcome.questions.count { it.verification == VerificationStatus.CORRECTED }
+        if (outcome.fromCache) overlay.toast("Same screen as your last scan: answered from the local cache (nothing was sent, no tokens used).")
+        else if (corrected > 0) overlay.toast("$corrected answer(s) were corrected after verification. Tap a bubble for details.")
+        else outcome.warnings.firstOrNull()?.let { overlay.toast(it) }
 
         if (settings.historyEnabled) {
-            runCatching { container.history.saveSession(live, settings.examMode.key, (settings.apiAccounts.firstOrNull()?.model ?: settings.model), settings.saveThumbnails) }
+            runCatching { container.history.saveSession(live, settings.examMode.key, "${outcome.accountName} (${outcome.providerName})", settings.saveThumbnails) }
         }
     }
 
@@ -276,35 +281,39 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         activeQuestionId?.let { overlay.setAnswerLoading(it, false) }
         activeQuestionId = id
         overlay.showPanel(titleFor(lq.question))
+        overlay.setPanelVerification(verificationLine(lq.question), lq.question.verification.isUncertain)
+        overlay.setPanelDetailedAvailable(!lq.detailed)
         if (lq.explanation != null) {
             overlay.setPanelBusy(false)
             overlay.setPanelBody(transcript(lq))
         } else {
-            requestExplanation(s, lq)
+            requestExplanation(s, lq, detailed = false)
         }
     }
 
-    private fun requestExplanation(s: LiveSession, lq: LiveQuestion) {
+    private fun requestExplanation(s: LiveSession, lq: LiveQuestion, detailed: Boolean) {
         val id = lq.question.id
         explainJob = scope.launch {
             overlay.setAnswerLoading(id, true)
             overlay.setPanelBusy(true)
-            overlay.setPanelBody("Explaining this question…\n\nOnly this question is sent to the selected API account.")
+            overlay.setPanelBody(if (detailed) "Writing the detailed solution…\n\nOnly this question is sent, to the account chosen by your priority list." else "Explaining this question briefly…\n\nOnly this question is sent, to the account chosen by your priority list.")
             try {
-                val out = container.ai.explain(lq.question, s.cropFor(lq.question))
+                val out = container.ai.explain(lq.question, s.cropFor(lq.question), detailed) { overlay.showStatus(it) }
+                overlay.showStatus("Answer generated using ${out.accountName}.", 2000)
                 lq.explanation = out.text
+                lq.detailed = detailed
+                overlay.setPanelDetailedAvailable(!detailed)
                 lq.followUps.clear()
                 recordUsage(s, out.usage)
                 lq.rowId?.let { container.history.saveExplanation(it, out.text) }
-                if (activeQuestionId == id) {
-                    val source = if (out.providerUsed.isBlank()) "" else "_API account: ${out.providerUsed}_\n\n"
-                    overlay.setPanelBody(source + transcript(lq))
-                }
+                if (activeQuestionId == id) overlay.setPanelBody(transcript(lq))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AiException) {
+                overlay.hideStatus()
                 if (activeQuestionId == id) overlay.setPanelBody("Could not get the explanation.\n\n${e.message}\n\nTap Regenerate to try again.")
             } catch (e: Exception) {
+                overlay.hideStatus()
                 if (activeQuestionId == id) overlay.setPanelBody("Could not get the explanation (${e.javaClass.simpleName}). Tap Regenerate to try again.")
             } finally {
                 overlay.setAnswerLoading(id, false)
@@ -319,7 +328,17 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         if (explainJob?.isActive == true) return
         lq.explanation = null
         lq.followUps.clear()
-        requestExplanation(s, lq)
+        requestExplanation(s, lq, detailed = lq.detailed)
+    }
+
+    /** "Detailed solution" chip: replaces the brief explanation with the full step-by-step one. */
+    override fun onDetailed() {
+        val s = session ?: return
+        val lq = activeQuestionId?.let { s.find(it) } ?: return
+        if (explainJob?.isActive == true) return
+        lq.explanation = null
+        lq.followUps.clear()
+        requestExplanation(s, lq, detailed = true)
     }
 
     override fun onFollowUp(text: String) {
@@ -332,7 +351,8 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
             overlay.setPanelBusy(true)
             overlay.setPanelBody(transcript(lq) + "\n\n──────\n**You:** $text\n\nThinking…", scrollToEnd = true)
             try {
-                val out = container.ai.followUp(lq.question, explanation, lq.followUps.toList(), text, s.cropFor(lq.question))
+                val out = container.ai.followUp(lq.question, explanation, lq.followUps.toList(), text, s.cropFor(lq.question)) { overlay.showStatus(it) }
+                overlay.showStatus("Answer generated using ${out.accountName}.", 2000)
                 lq.followUps += ChatMessage("user", text)
                 lq.followUps += ChatMessage("assistant", out.text)
                 recordUsage(s, out.usage)
@@ -340,8 +360,7 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
                     container.history.addMessage(it, "user", text)
                     container.history.addMessage(it, "assistant", out.text)
                 }
-                val source = if (out.providerUsed.isBlank()) "" else "_Latest reply by ${out.providerUsed}_\n\n"
-                overlay.setPanelBody(source + transcript(lq), scrollToEnd = true)
+                overlay.setPanelBody(transcript(lq), scrollToEnd = true)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AiException) {
@@ -388,6 +407,18 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         if (settings.showChapterTopic && q.chapter.isNotBlank()) parts += q.chapter
         val head = parts.joinToString(" · ").ifBlank { "Question" }
         return "$head  →  ${AnswerFormatter.bubbleText(q)}"
+    }
+
+    /** "✓ Verified: ..." line for the panel, or null when verification did not run. Never implies more certainty than it has. */
+    private fun verificationLine(q: DetectedQuestion): String? {
+        if (q.verification == VerificationStatus.NOT_RUN) return null
+        val icon = when (q.verification) {
+            VerificationStatus.VERIFIED -> "✓"
+            VerificationStatus.CORRECTED -> "✎"
+            VerificationStatus.UNABLE -> "?"
+            else -> "⚠"
+        }
+        return "$icon ${q.verification.label}" + if (q.verificationNote.isNotBlank()) ": ${q.verificationNote}" else ""
     }
 
     private fun transcript(lq: LiveQuestion): String = buildString {

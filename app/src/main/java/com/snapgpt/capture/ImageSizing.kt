@@ -14,7 +14,7 @@ enum class ImageQuality(val key: String, val label: String, val maxLongSide: Int
 }
 
 object ImageSizing {
-    /** Never upscales. Keeps the aspect ratio, caps the long side and SnapGPT's 33-megapixel safety cap. */
+    /** Never upscales. Keeps the aspect ratio, caps the long side and Groq's 33-megapixel limit. */
     fun targetSize(width: Int, height: Int, maxLongSide: Int): Pair<Int, Int> {
         if (width <= 0 || height <= 0) return 1 to 1
         var scale = 1.0

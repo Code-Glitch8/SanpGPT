@@ -54,7 +54,67 @@ data class QuestionEntity(
     val optionsJson: String,
     val note: String,
     val explanation: String?,
+    val verification: String = "NOT_RUN",
+    val verificationNote: String = "",
+    val originalAnswer: String? = null,
 )
+
+/** One user-configured API account. [keyBlob] is the Keystore-encrypted API key ("iv:ciphertext"); it is never plain text. */
+@Entity(tableName = "accounts")
+data class AccountEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val provider: String,
+    val endpoint: String,
+    val model: String,
+    val enabled: Boolean,
+    val priority: Int,
+    /** -1 = use built-in knowledge, 0 = user says no images, 1 = user/validation says images work. */
+    val imageOverride: Int,
+    val status: String,
+    val lastError: String?,
+    val lastSuccessAt: Long,
+    val cooldownUntil: Long,
+    val cooldownReason: String?,
+    val rateNote: String?,
+    val keyBlob: String?,
+    val requests: Int = 0,
+    val successes: Int = 0,
+    val failures: Int = 0,
+    val quotaErrors: Int = 0,
+    val actualIn: Long = 0,
+    val actualOut: Long = 0,
+    val estIn: Long = 0,
+    val estOut: Long = 0,
+    val analysisReq: Int = 0,
+    val explanationReq: Int = 0,
+    val verificationReq: Int = 0,
+    val followUpReq: Int = 0,
+)
+
+@Dao
+interface AccountDao {
+    @Query("SELECT * FROM accounts ORDER BY priority, name")
+    fun observeAll(): Flow<List<AccountEntity>>
+
+    @Query("SELECT * FROM accounts ORDER BY priority, name")
+    suspend fun all(): List<AccountEntity>
+
+    @Query("SELECT * FROM accounts WHERE id = :id")
+    suspend fun get(id: String): AccountEntity?
+
+    @androidx.room.Upsert
+    suspend fun upsert(a: AccountEntity)
+
+    @androidx.room.Upsert
+    suspend fun upsertAll(list: List<AccountEntity>)
+
+    @Query("DELETE FROM accounts WHERE id = :id")
+    suspend fun delete(id: String)
+
+    @Query("DELETE FROM accounts")
+    suspend fun deleteAll()
+}
 
 @Entity(
     tableName = "messages",
@@ -128,9 +188,10 @@ interface SnapDao {
     suspend fun clearThumbnailPaths()
 }
 
-@Database(entities = [SessionEntity::class, QuestionEntity::class, MessageEntity::class], version = 1, exportSchema = false)
+@Database(entities = [SessionEntity::class, QuestionEntity::class, MessageEntity::class, AccountEntity::class], version = 1, exportSchema = false)
 abstract class SnapDatabase : RoomDatabase() {
     abstract fun dao(): SnapDao
+    abstract fun accountDao(): AccountDao
 
     companion object {
         fun create(context: Context): SnapDatabase =

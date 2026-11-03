@@ -1,6 +1,5 @@
 package com.snapgpt.settings
 
-import com.snapgpt.ai.AiDefaults
 import com.snapgpt.capture.ImageQuality
 import com.snapgpt.jee.ExamMode
 import com.snapgpt.jee.JeeConfig
@@ -35,11 +34,12 @@ data class AppSettings(
     /** Last position as fractions of the usable area; negative = not saved yet. Survives rotation. */
     val lastPosX: Float = -1f,
     val lastPosY: Float = -1f,
-    // AI
-    val model: String = AiDefaults.DEFAULT_MODEL,
-    /** Unlimited API accounts. Their list order is the failover priority order. */
-    val apiAccounts: List<ApiAccount> = listOf(ApiAccount.groq()),
-    val automaticApiFailover: Boolean = true,
+    // Automatic API failover (accounts themselves live in the encrypted account store)
+    val autoFailover: Boolean = true,
+    val maxRetriesPerAccount: Int = 2,
+    // Answer verification
+    val verificationEnabled: Boolean = true,
+    val verifyDifferentAccount: Boolean = true,
     // JEE
     val examMode: ExamMode = ExamMode.AUTOMATIC,
     val syllabusRestriction: Boolean = true,
@@ -66,5 +66,7 @@ data class AppSettings(
         const val MAX_OPACITY = 60
         const val MIN_QUESTIONS = 1
         const val MAX_QUESTIONS = 10
+        const val MIN_RETRIES = 0
+        const val MAX_RETRIES = 4
     }
 }

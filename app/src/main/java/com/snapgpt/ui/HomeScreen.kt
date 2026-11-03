@@ -45,7 +45,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.snapgpt.ai.ConnectionState
 import com.snapgpt.capture.ConsentActivity
 import com.snapgpt.services.OverlayService
 import java.text.DateFormat
@@ -55,15 +54,14 @@ private enum class StartDialog { OVERLAY, KEY, NOTIFICATIONS }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onHistory: () -> Unit, onOpenSession: (Long) -> Unit) {
+fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onAccounts: () -> Unit, onUsage: () -> Unit, onHistory: () -> Unit, onOpenSession: (Long) -> Unit) {
     val ctx = LocalContext.current
     val settings by vm.settings.collectAsStateWithLifecycle()
     val running by vm.running.collectAsStateWithLifecycle()
     val projection by vm.projectionReady.collectAsStateWithLifecycle()
     val perms by vm.perms.collectAsStateWithLifecycle()
-    val hasKey by vm.hasKey.collectAsStateWithLifecycle()
-    val hasEnabledApi = hasKey && settings.apiAccounts.any { it.enabled && vm.hasApiKey(it.id) }
-    val connection by vm.connection.collectAsStateWithLifecycle()
+    val hasAccount by vm.hasUsableAccount.collectAsStateWithLifecycle()
+    val accounts by vm.accounts.collectAsStateWithLifecycle()
     val sessions by vm.sessions.collectAsStateWithLifecycle()
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -87,7 +85,7 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onHistory: () -> Unit,
     fun start() {
         when {
             !perms.overlay -> dialog = StartDialog.OVERLAY
-            !hasEnabledApi -> dialog = StartDialog.KEY
+            !hasAccount -> dialog = StartDialog.KEY
             Build.VERSION.SDK_INT >= 33 && !perms.notifications -> dialog = StartDialog.NOTIFICATIONS
             else -> launchConsent()
         }
@@ -131,14 +129,30 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onHistory: () -> Unit,
                     if (perms.notifications) "Allowed (shows the Stop button)" else "Optional; the assistant still works",
                 )
                 StatusRow("Screen capture", projection, if (projection) "Authorised for this session" else "Asked each time the assistant starts")
-                StatusRow("AI API accounts", hasEnabledApi, if (hasEnabledApi) "At least one enabled account has a saved key" else "Add and enable one in Settings > AI APIs")
-                StatusRow(
-                    "API connection", connection.state == ConnectionState.CONNECTED,
-                    connection.message,
-                )
-                StatusRow("Primary model", true, settings.apiAccounts.firstOrNull { it.enabled }?.model ?: settings.model)
-                OutlinedButton(onClick = { vm.testConnection() }, enabled = hasEnabledApi && !connection.testing) {
-                    Text(if (connection.testing) "Testing…" else "Test connection")
+                val now = System.currentTimeMillis()
+                // The account a screenshot would go to first: highest priority that is enabled, has a model and is not cooling down.
+                val active = accounts.firstOrNull { it.enabled && it.model.isNotBlank() && !it.inCooldown(now) }
+                StatusRow("Active provider", active != null, active?.let { "${it.name} (${it.provider.displayName})" } ?: "No usable account")
+                StatusRow("Active model", active != null, active?.model ?: "Add an account in Settings > API accounts")
+            }
+
+            SectionCard("API accounts") {
+                if (accounts.isEmpty()) {
+                    Text("No accounts yet. Add a Groq, Gemini, OpenRouter, Anthropic or custom OpenAI-compatible account.", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    val cooling = accounts.count { it.enabled && it.inCooldown(now) }
+                    Text(
+                        "${accounts.size} account(s) · ${accounts.count { it.enabled }} enabled" + if (cooling > 0) " · $cooling cooling down" else "",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    accounts.take(4).forEachIndexed { i, a ->
+                        Text("${i + 1}. ${a.name} · ${a.provider.displayName} · ${statusLine(a, now)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (accounts.size > 4) Text("…and ${accounts.size - 4} more", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onAccounts) { Text(if (accounts.isEmpty()) "Add account" else "Manage accounts") }
+                    OutlinedButton(onClick = onUsage) { Text("Usage") }
                 }
             }
 
@@ -192,9 +206,9 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onHistory: () -> Unit,
         )
         StartDialog.KEY -> AlertDialog(
             onDismissRequest = { dialog = null },
-            title = { Text("Add an API key first") },
-            text = { Text("SnapGPT needs at least one enabled API account with a saved key. Add a Groq, OpenRouter or custom OpenAI-compatible vision API in Settings > AI APIs.") },
-            confirmButton = { TextButton(onClick = { dialog = null; onSettings() }) { Text("Open settings") } },
+            title = { Text("Add an API account first") },
+            text = { Text("SnapGPT needs at least one enabled API account (Groq, Gemini, OpenRouter, Anthropic or a custom OpenAI-compatible server) to analyse screenshots. Add as many as you like; they act as backups for each other.") },
+            confirmButton = { TextButton(onClick = { dialog = null; onAccounts() }) { Text("Add account") } },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("Later") } },
         )
         StartDialog.NOTIFICATIONS -> AlertDialog(

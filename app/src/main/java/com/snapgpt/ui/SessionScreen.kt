@@ -110,6 +110,13 @@ private fun QuestionCard(
                 Text(AnswerFormatter.bubbleText(d), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 if (AnswerFormatter.isUncertain(d)) Text("   (low confidence — double-check)", style = MaterialTheme.typography.bodySmall)
             }
+            if (d.verification != com.snapgpt.ai.VerificationStatus.NOT_RUN) {
+                Text(
+                    d.verification.label + if (d.verificationNote.isNotBlank()) ": ${d.verificationNote}" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (d.verification.isUncertain) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (explanation == null) {
                 Button(onClick = onExplain, enabled = !busy) { Text(if (busy) "Explaining…" else "Explain this question") }
             } else {

@@ -12,6 +12,9 @@ import com.snapgpt.overlay.FRect
 class LiveQuestion(val question: DetectedQuestion) {
     var rowId: Long? = null
     var explanation: String? = null
+
+    /** True once the full step-by-step solution (not the brief explanation) is what is stored in [explanation]. */
+    var detailed: Boolean = false
     var screenRect: FRect? = null
 
     /** Follow-up conversation after the explanation: alternating user / assistant messages. */

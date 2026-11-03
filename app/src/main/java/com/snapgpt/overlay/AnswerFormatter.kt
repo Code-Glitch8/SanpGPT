@@ -24,6 +24,6 @@ object AnswerFormatter {
     /** Short answers (a letter or two digits) get a round bubble; everything else a pill. */
     fun isRound(text: String): Boolean = text.length <= 2
 
-    /** Low confidence answers are drawn with an amber outline so the student double-checks them. */
-    fun isUncertain(q: DetectedQuestion): Boolean = q.needsClarification || q.confidence < 0.6f
+    /** Low confidence or unverifiable answers are drawn with an amber outline so the student double-checks them. */
+    fun isUncertain(q: DetectedQuestion): Boolean = q.needsClarification || q.confidence < 0.6f || q.verification.isUncertain
 }
