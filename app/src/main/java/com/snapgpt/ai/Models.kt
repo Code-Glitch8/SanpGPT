@@ -4,6 +4,7 @@ package com.snapgpt.ai
 object AiDefaults {
     /** Default model suggested for a new Groq account. SnapGPT never switches models silently. */
     const val DEFAULT_MODEL = "qwen/qwen3.8-27b"
+    const val BASE_URL = "https://api.groq.com/openai/v1"
 
     /** Conservative cap on images per request (Groq documents 3). Screenshots use one, explanations at most one. */
     const val MAX_IMAGES_PER_REQUEST = 3
