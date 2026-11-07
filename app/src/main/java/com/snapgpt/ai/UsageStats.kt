@@ -3,8 +3,9 @@ package com.snapgpt.ai
 /**
  * Token and request accounting.
  *
- * ACTUAL values come from the `usage` object returned by the successful API provider. ESTIMATED values are computed locally (about 4 characters per
- * token plus ~2048 per image) and are shown separately so they are never mistaken for billing data.
+ * ACTUAL values come from the usage object returned by a successful provider request.
+ * ESTIMATED values are computed locally and are shown separately so they are never
+ * mistaken for billing data.
  */
 data class UsageStats(
     val requests: Int = 0,
@@ -17,9 +18,14 @@ data class UsageStats(
     val estimatedInputTokens: Long = 0,
     val estimatedOutputTokens: Long = 0,
 ) {
-    val estimatedTotalTokens: Long get() = estimatedInputTokens + estimatedOutputTokens
+    val estimatedTotalTokens: Long
+        get() = estimatedInputTokens + estimatedOutputTokens
 
-    fun recordSuccess(actual: TokenUsage?, estimatedInput: Long, estimatedOutput: Long): UsageStats = copy(
+    fun recordSuccess(
+        actual: TokenUsage?,
+        estimatedInput: Long,
+        estimatedOutput: Long,
+    ): UsageStats = copy(
         requests = requests + 1,
         successes = successes + 1,
         actualInputTokens = actualInputTokens + (actual?.promptTokens ?: 0),
@@ -29,7 +35,7 @@ data class UsageStats(
         estimatedOutputTokens = estimatedOutputTokens + estimatedOutput,
     )
 
-    /** A failed request: nothing is known to have been billed, so only the local estimate of what was sent is kept. */
+    /** A failed request records only the local estimate of what was sent. */
     fun recordFailure(estimatedInput: Long): UsageStats = copy(
         requests = requests + 1,
         failures = failures + 1,
@@ -37,14 +43,4 @@ data class UsageStats(
     )
 
     fun recordCacheHit(): UsageStats = copy(cacheHits = cacheHits + 1)
-}
-
-object TokenEstimator {
-    fun text(chars: Int): Long = (chars + 3L) / 4L
-
-    fun request(messages: List<ChatMessage>): Long {
-        val chars = messages.sumOf { it.text.length }
-        val images = messages.sumOf { it.imageDataUrls.size }
-        return text(chars) + images.toLong() * AiDefaults.IMAGE_TOKENS_ESTIMATE
-    }
 }

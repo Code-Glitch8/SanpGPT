@@ -50,11 +50,22 @@ import com.snapgpt.services.OverlayService
 import java.text.DateFormat
 import java.util.Date
 
-private enum class StartDialog { OVERLAY, KEY, NOTIFICATIONS }
+private enum class StartDialog {
+    OVERLAY,
+    KEY,
+    NOTIFICATIONS,
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onAccounts: () -> Unit, onUsage: () -> Unit, onHistory: () -> Unit, onOpenSession: (Long) -> Unit) {
+fun HomeScreen(
+    vm: MainViewModel,
+    onSettings: () -> Unit,
+    onAccounts: () -> Unit,
+    onUsage: () -> Unit,
+    onHistory: () -> Unit,
+    onOpenSession: (Long) -> Unit,
+) {
     val ctx = LocalContext.current
     val settings by vm.settings.collectAsStateWithLifecycle()
     val running by vm.running.collectAsStateWithLifecycle()
@@ -63,13 +74,18 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onAccounts: () -> Unit
     val hasAccount by vm.hasUsableAccount.collectAsStateWithLifecycle()
     val accounts by vm.accounts.collectAsStateWithLifecycle()
     val sessions by vm.sessions.collectAsStateWithLifecycle()
-
     val lifecycleOwner = LocalLifecycleOwner.current
+
     DisposableEffect(lifecycleOwner) {
-        val obs = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_RESUME) vm.refreshPermissions() }
-        lifecycleOwner.lifecycle.addObserver(obs)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) vm.refreshPermissions()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+
+    // Shared by both the Status and API accounts cards. It must be in HomeScreen scope.
+    val now = System.currentTimeMillis()
 
     var dialog by remember { mutableStateOf<StartDialog?>(null) }
 
@@ -77,9 +93,11 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onAccounts: () -> Unit
         ctx.startActivity(Intent(ctx, ConsentActivity::class.java))
     }
 
-    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+    val notifLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
         vm.refreshPermissions()
-        launchConsent() // the assistant works without the notification being visible, so continue either way
+        launchConsent()
     }
 
     fun start() {
@@ -95,63 +113,130 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onAccounts: () -> Unit
         topBar = {
             TopAppBar(
                 title = { Text("SnapGPT", fontWeight = FontWeight.Bold) },
-                actions = { IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, contentDescription = "Settings") } },
+                actions = {
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    }
+                },
             )
         },
-    ) { pad ->
+    ) { paddingValues ->
         Column(
-            Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
                 SnapLogo(84.dp)
                 Gap(8.dp)
-                Text("AI floating screen assistant for JEE", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "AI floating screen assistant for JEE",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             SectionCard("Floating assistant") {
                 Text(
-                    if (running) "The floating circle is active. Tap it over any app to scan the screen or select a question area."
-                    else "Start the assistant to show the floating circle over other apps. Android will ask you to allow screen capture; SnapGPT only captures when you tap Scan.",
+                    if (running) {
+                        "The floating circle is active. Tap it over any app to scan the screen or select a question area."
+                    } else {
+                        "Start the assistant to show the floating circle over other apps. Android will ask you to allow screen capture; SnapGPT only captures when you tap Scan."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                 )
+
                 if (running) {
-                    Button(onClick = { OverlayService.stop(ctx) }, modifier = Modifier.fillMaxWidth()) { Text("Stop assistant") }
+                    Button(
+                        onClick = { OverlayService.stop(ctx) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Stop assistant")
+                    }
                 } else {
-                    Button(onClick = { start() }, modifier = Modifier.fillMaxWidth()) { Text("Start assistant") }
+                    Button(
+                        onClick = { start() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Start assistant")
+                    }
                 }
             }
 
             SectionCard("Status") {
-                StatusRow("Draw over other apps", perms.overlay, if (perms.overlay) "Allowed" else "Needed to show the floating circle")
                 StatusRow(
-                    "Notifications", perms.notifications || Build.VERSION.SDK_INT < 33,
-                    if (perms.notifications) "Allowed (shows the Stop button)" else "Optional; the assistant still works",
+                    "Draw over other apps",
+                    perms.overlay,
+                    if (perms.overlay) "Allowed" else "Needed to show the floating circle",
                 )
-                StatusRow("Screen capture", projection, if (projection) "Authorised for this session" else "Asked each time the assistant starts")
-                val now = System.currentTimeMillis()
-                // The account a screenshot would go to first: highest priority that is enabled, has a model and is not cooling down.
-                val active = accounts.firstOrNull { it.enabled && it.model.isNotBlank() && !it.inCooldown(now) }
-                StatusRow("Active provider", active != null, active?.let { "${it.name} (${it.provider.displayName})" } ?: "No usable account")
-                StatusRow("Active model", active != null, active?.model ?: "Add an account in Settings > API accounts")
+                StatusRow(
+                    "Notifications",
+                    perms.notifications || Build.VERSION.SDK_INT < 33,
+                    if (perms.notifications) "Allowed (shows the Stop button)"
+                    else "Optional; the assistant still works",
+                )
+                StatusRow(
+                    "Screen capture",
+                    projection,
+                    if (projection) "Authorised for this session"
+                    else "Asked each time the assistant starts",
+                )
+
+                // The account a screenshot would go to first.
+                val active = accounts.firstOrNull {
+                    it.enabled && it.model.isNotBlank() && !it.inCooldown(now)
+                }
+                StatusRow(
+                    "Active provider",
+                    active != null,
+                    active?.let { "${it.name} (${it.provider.displayName})" } ?: "No usable account",
+                )
+                StatusRow(
+                    "Active model",
+                    active != null,
+                    active?.model ?: "Add an account in Settings > API accounts",
+                )
             }
 
             SectionCard("API accounts") {
                 if (accounts.isEmpty()) {
-                    Text("No accounts yet. Add a Groq, Gemini, OpenRouter, Anthropic or custom OpenAI-compatible account.", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "No accounts yet. Add a Groq, Gemini, OpenRouter, Anthropic or custom OpenAI-compatible account.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 } else {
                     val cooling = accounts.count { it.enabled && it.inCooldown(now) }
                     Text(
-                        "${accounts.size} account(s) · ${accounts.count { it.enabled }} enabled" + if (cooling > 0) " · $cooling cooling down" else "",
+                        "${accounts.size} account(s) · ${accounts.count { it.enabled }} enabled" +
+                            if (cooling > 0) " · $cooling cooling down" else "",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    accounts.take(4).forEachIndexed { i, a ->
-                        Text("${i + 1}. ${a.name} · ${a.provider.displayName} · ${statusLine(a, now)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    accounts.take(4).forEachIndexed { index, account ->
+                        Text(
+                            "${index + 1}. ${account.name} · ${account.provider.displayName} · ${statusLine(account, now)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                    if (accounts.size > 4) Text("…and ${accounts.size - 4} more", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (accounts.size > 4) {
+                        Text(
+                            "…and ${accounts.size - 4} more",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
+
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onAccounts) { Text(if (accounts.isEmpty()) "Add account" else "Manage accounts") }
+                    Button(onClick = onAccounts) {
+                        Text(if (accounts.isEmpty()) "Add account" else "Manage accounts")
+                    }
                     OutlinedButton(onClick = onUsage) { Text("Usage") }
                 }
             }
@@ -159,19 +244,31 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onAccounts: () -> Unit
             SectionCard("Recent scans") {
                 if (sessions.isEmpty()) {
                     Text(
-                        if (settings.historyEnabled) "No scans yet." else "History is turned off (Settings > Privacy).",
-                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        if (settings.historyEnabled) "No scans yet."
+                        else "History is turned off (Settings > Privacy).",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    sessions.take(3).forEach { s ->
-                        Column(Modifier.fillMaxWidth().clickable { onOpenSession(s.id) }.padding(vertical = 4.dp)) {
+                    sessions.take(3).forEach { session ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenSession(session.id) }
+                                .padding(vertical = 4.dp),
+                        ) {
                             Text(
-                                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(s.createdAt)),
+                                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+                                    .format(Date(session.createdAt)),
                                 style = MaterialTheme.typography.bodyLarge,
                             )
                             Text(
-                                listOf(if (s.scanType == "AREA") "Area" else "Full screen", s.summary.ifBlank { "No subject" }).joinToString(" · "),
-                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                listOf(
+                                    if (session.scanType == "AREA") "Area" else "Full screen",
+                                    session.summary.ifBlank { "No subject" },
+                                ).joinToString(" · "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -179,14 +276,28 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onAccounts: () -> Unit
                 }
             }
 
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(onClick = onHistory, modifier = Modifier.weight(1f)) { Text("History") }
-                OutlinedButton(onClick = onSettings, modifier = Modifier.weight(1f)) { Text("Settings") }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onHistory,
+                    modifier = Modifier.weight(1f),
+                ) { Text("History") }
+                OutlinedButton(
+                    onClick = onSettings,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Settings") }
             }
+
             Text(
                 "Answers are generated by an AI model and can be wrong. Always double-check important results.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
             )
         }
     }
@@ -195,31 +306,71 @@ fun HomeScreen(vm: MainViewModel, onSettings: () -> Unit, onAccounts: () -> Unit
         StartDialog.OVERLAY -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("Allow drawing over other apps") },
-            text = { Text("SnapGPT shows its floating circle and answer bubbles on top of other apps. Android needs you to switch this on for SnapGPT in system settings. Come back here afterwards and press Start again.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    dialog = null
-                    ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}")))
-                }) { Text("Open settings") }
+            text = {
+                Text(
+                    "SnapGPT shows its floating circle and answer bubbles on top of other apps. " +
+                        "Android needs you to switch this on for SnapGPT in system settings. " +
+                        "Come back here afterwards and press Start again.",
+                )
             },
-            dismissButton = { TextButton(onClick = { dialog = null }) { Text("Not now") } },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        dialog = null
+                        ctx.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${ctx.packageName}"),
+                            ),
+                        )
+                    },
+                ) { Text("Open settings") }
+            },
+            dismissButton = {
+                TextButton(onClick = { dialog = null }) { Text("Not now") }
+            },
         )
+
         StartDialog.KEY -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("Add an API account first") },
-            text = { Text("SnapGPT needs at least one enabled API account (Groq, Gemini, OpenRouter, Anthropic or a custom OpenAI-compatible server) to analyse screenshots. Add as many as you like; they act as backups for each other.") },
-            confirmButton = { TextButton(onClick = { dialog = null; onAccounts() }) { Text("Add account") } },
-            dismissButton = { TextButton(onClick = { dialog = null }) { Text("Later") } },
+            text = {
+                Text(
+                    "SnapGPT needs at least one enabled API account (Groq, Gemini, OpenRouter, " +
+                        "Anthropic or a custom OpenAI-compatible server) to analyse screenshots. " +
+                        "Add as many as you like; they act as backups for each other.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { dialog = null; onAccounts() }) { Text("Add account") }
+            },
+            dismissButton = {
+                TextButton(onClick = { dialog = null }) { Text("Later") }
+            },
         )
+
         StartDialog.NOTIFICATIONS -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("Show the assistant notification") },
-            text = { Text("While the assistant runs, Android requires a notification. It also gives you a Stop button. You can skip this; the assistant still works.") },
-            confirmButton = {
-                TextButton(onClick = { dialog = null; notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text("Allow") }
+            text = {
+                Text(
+                    "While the assistant runs, Android requires a notification. It also gives you a Stop button. " +
+                        "You can skip this; the assistant still works.",
+                )
             },
-            dismissButton = { TextButton(onClick = { dialog = null; launchConsent() }) { Text("Skip") } },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        dialog = null
+                        notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    },
+                ) { Text("Allow") }
+            },
+            dismissButton = {
+                TextButton(onClick = { dialog = null; launchConsent() }) { Text("Skip") }
+            },
         )
-        null -> {}
+
+        null -> Unit
     }
 }
