@@ -56,6 +56,7 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
     private var pendingType = ScanType.FULL_SCREEN
     private var activeQuestionId: String? = null
     private val voiceChatHistory = mutableListOf<ChatMessage>()
+    private var voiceCaptureInProgress = false
     private var bubbleHidden = false
 
     init {
@@ -70,7 +71,7 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         // Existing explanation-panel dictation remains a follow-up; standalone voice requests use the general assistant path.
         VoiceBridge.onSend = { text -> if (activeQuestionId != null) onFollowUp(text) else onVoiceAsk(text) }
         VoiceBridge.onAsk = { text -> onVoiceAsk(text) }
-        VoiceBridge.onClosed = { overlay.setPanelHidden(false) }
+        VoiceBridge.onClosed = { if (!voiceCaptureInProgress) overlay.setPanelHidden(false) }
         scope.launch { container.settings.flow.collect { settings = it; overlay.applySettings(it) } }
     }
 
@@ -109,14 +110,16 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         overlay.setPanelDetailedAvailable(false)
         overlay.setPanelBusy(true)
         overlay.setPanelBody("Processing your request…")
+        val needsScreen = requiresScreenContext(request)
+        voiceCaptureInProgress = needsScreen
         explainJob = scope.launch {
             var screenshot: Bitmap? = null
             try {
-                if (requiresScreenContext(request)) {
+                if (needsScreen) {
                     if (!capture.isReady) {
                         throw AiException(AiErrorCode.NOT_READY, "Screen capture is not active. Start the assistant's screen-capture session before asking about your screen.")
                     }
-                    screenshot = grabCleanScreenshot()
+                    screenshot = grabCleanScreenshot(keepPanelHidden = true)
                     if (BitmapCodec.looksBlank(screenshot!!)) {
                         throw AiException(AiErrorCode.CAPTURE, "The screen capture was blank or blocked by the app in front. Nothing was sent.")
                     }
@@ -143,6 +146,8 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
                 overlay.setPanelBody("Could not answer your request (${e.javaClass.simpleName}). Please try again.")
             } finally {
                 screenshot?.recycle()
+                voiceCaptureInProgress = false
+                overlay.setPanelHidden(false)
                 overlay.setPanelBusy(false)
             }
         }
@@ -275,13 +280,14 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
     }
 
     /** Hide SnapGPT's own windows, wait for the compositor, capture once, then show them again. */
-    private suspend fun grabCleanScreenshot(): Bitmap {
+    private suspend fun grabCleanScreenshot(keepPanelHidden: Boolean = false): Bitmap {
         overlay.setCaptureHidden(true)
         try {
             delay(260)
             return capture.capture()
         } finally {
             overlay.setCaptureHidden(false)
+            if (keepPanelHidden) overlay.setPanelHidden(true)
         }
     }
 
