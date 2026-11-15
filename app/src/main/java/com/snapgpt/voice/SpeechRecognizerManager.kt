@@ -27,7 +27,7 @@ import android.speech.SpeechRecognizer
 class SpeechRecognizerManager(context: Context, private val listener: Listener) {
 
     interface Listener {
-        fun onListening()
+        fun onListening(usingOnDevice: Boolean)
         fun onLevel(rmsDb: Float)
         fun onEndOfSpeech()
         fun onPartial(text: String)
@@ -70,7 +70,7 @@ class SpeechRecognizerManager(context: Context, private val listener: Listener) 
         r.setRecognitionListener(object : RecognitionListener {
             private fun current() = active && id == session && recognizer === r
 
-            override fun onReadyForSpeech(params: Bundle?) { if (current()) listener.onListening() }
+            override fun onReadyForSpeech(params: Bundle?) { if (current()) listener.onListening(usingOnDevice) }
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(rmsdB: Float) { if (current()) listener.onLevel(rmsdB) }
             override fun onBufferReceived(buffer: ByteArray?) {} // raw audio is deliberately ignored and never kept
