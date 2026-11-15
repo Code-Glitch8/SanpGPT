@@ -11,6 +11,7 @@ import com.snapgpt.settings.AppSettings
 interface OverlayCallbacks {
     fun onScanFull()
     fun onSelectArea()
+    fun onVoiceAsk()
     fun onHideAssistant()
     fun onOpenSettings()
     fun onClearAnswers()
@@ -73,6 +74,7 @@ class OverlayManager(private val service: Context, private val cb: OverlayCallba
         val items = buildList {
             add(MenuItem(R.drawable.ic_menu_scan, service.getString(R.string.menu_scan_full)) { cb.onScanFull() })
             add(MenuItem(R.drawable.ic_menu_crop, service.getString(R.string.menu_select_area)) { cb.onSelectArea() })
+            add(MenuItem(R.drawable.ic_mic, service.getString(R.string.menu_voice_ask)) { cb.onVoiceAsk() })
             if (hasAnswers) add(MenuItem(R.drawable.ic_menu_clear, service.getString(R.string.menu_clear_answers)) { cb.onClearAnswers() })
             add(MenuItem(R.drawable.ic_menu_hide, service.getString(R.string.menu_hide)) { cb.onHideAssistant() })
             add(MenuItem(R.drawable.ic_menu_settings, service.getString(R.string.menu_settings)) { cb.onOpenSettings() })
