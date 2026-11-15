@@ -25,6 +25,7 @@ interface OverlayCallbacks {
     fun onRegenerate()
     fun onDetailed()
     fun onFollowUp(text: String)
+    fun onVoiceInput()
 }
 
 /** Owns every overlay window (circle, menu, selection, answer bubbles, explanation panel) and their lifecycle. */
@@ -128,6 +129,7 @@ class OverlayManager(private val service: Context, private val cb: OverlayCallba
             override fun onRegenerate() = cb.onRegenerate()
             override fun onDetailed() = cb.onDetailed()
             override fun onFollowUp(text: String) = cb.onFollowUp(text)
+            override fun onVoice() = cb.onVoiceInput()
         })
         panel.setTitle(title)
     }
@@ -138,6 +140,8 @@ class OverlayManager(private val service: Context, private val cb: OverlayCallba
     fun setPanelDetailedAvailable(available: Boolean) = panel.setDetailedAvailable(available)
     fun clearPanelInput() = panel.clearInput()
     fun hidePanel() = panel.hide()
+    /** Hides or restores the explanation panel without closing it (used while the voice screen is open). */
+    fun setPanelHidden(hidden: Boolean) = panel.setCaptureHidden(hidden)
 
     // ---- status messages (failover narration)
 

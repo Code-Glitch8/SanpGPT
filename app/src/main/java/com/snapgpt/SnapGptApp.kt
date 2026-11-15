@@ -7,6 +7,10 @@ import com.snapgpt.ai.AiService
 import com.snapgpt.ai.failover.AccountTester
 import com.snapgpt.ai.failover.FailoverManager
 import com.snapgpt.ai.providers.Adapters
+import com.snapgpt.backup.BackupManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import com.snapgpt.database.SnapDatabase
 import com.snapgpt.history.HistoryRepository
 import com.snapgpt.networking.UrlConnectionTransport
@@ -23,6 +27,11 @@ class AppContainer(app: Application) {
     /** Every API key is encrypted individually with its own Android Keystore key. */
     val accounts: AccountRepository by lazy { AccountRepository(database.accountDao(), KeyCipher()) }
 
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** Automatic encrypted internal backup, startup recovery and portable export/import of the API configuration. */
+    val backup: BackupManager by lazy { BackupManager(app, accounts, database.accountDao(), settings, KeyCipher(), appScope) }
+
     /**
      * To use a backend proxy later (recommended for public releases so no key ships on devices), give the accounts proxy
      * endpoints (each account has an editable endpoint) and move key handling to the server.
@@ -34,6 +43,12 @@ class AppContainer(app: Application) {
 
 class SnapGptApp : Application() {
     val container: AppContainer by lazy { AppContainer(this) }
+
+    override fun onCreate() {
+        super.onCreate()
+        // Never blocks start-up and never throws: recovery and backup run on a background scope.
+        runCatching { container.backup.start() }
+    }
 }
 
 val Context.container: AppContainer get() = (applicationContext as SnapGptApp).container

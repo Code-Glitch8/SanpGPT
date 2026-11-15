@@ -34,6 +34,9 @@ class AccountRepository(private val dao: AccountDao, private val cipher: KeyCiph
     /** True when at least one enabled account has a saved key (needed before scanning). */
     val hasUsableAccount: Flow<Boolean> = dao.observeAll().map { list -> list.any { it.enabled && !it.keyBlob.isNullOrBlank() } }
 
+    /** Runs [block] while holding the account-store lock, so backup/restore never interleaves with other writes. */
+    suspend fun <T> withStoreLock(block: suspend () -> T): T = lock.withLock { block() }
+
     // ------------------------------------------------------------------ AccountStore (used by the failover manager)
 
     override suspend fun accounts(): List<ApiAccount> = withContext(Dispatchers.IO) { dao.all().map { it.toAccount() } }
