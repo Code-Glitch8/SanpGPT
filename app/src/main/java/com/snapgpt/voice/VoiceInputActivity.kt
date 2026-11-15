@@ -6,21 +6,15 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import android.view.Gravity
+import android.view.WindowManager
+import kotlin.math.roundToInt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.snapgpt.container
 import com.snapgpt.settings.AppSettings
@@ -70,7 +64,18 @@ class VoiceInputActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // Compact transparent floating window; the app behind it stays visible.
+        window.setBackgroundDrawableResource(android.R.color.transparent)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
+        window.setLayout(
+            (resources.displayMetrics.density * 340f).roundToInt(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+        )
+        window.attributes = window.attributes.apply {
+            gravity = Gravity.CENTER
+            dimAmount = 0f
+        }
         setContent {
             val settings by container.settings.flow.collectAsStateWithLifecycle(initialValue = AppSettings())
             SnapGptTheme(settings.theme) { Content() }
@@ -96,23 +101,17 @@ class VoiceInputActivity : ComponentActivity() {
             },
         )
         BackHandler { actions.onCancel() }
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.45f))
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { actions.onCancel() },
-            contentAlignment = Alignment.BottomCenter,
-        ) {
-            Surface(
-                // Taps on the card itself must not fall through to the dismissing scrim.
-                modifier = Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
-                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-                color = androidx.compose.material3.MaterialTheme.colorScheme.surface,
-                tonalElevation = 3.dp,
-            ) {
-                VoiceInputPanel(state, actions, Modifier.padding(top = 12.dp))
-            }
-        }
+        CompactVoiceInputBar(
+            state = state,
+            actions = actions,
+            onDrag = { dx, dy ->
+                window.attributes = window.attributes.apply {
+                    x += dx.roundToInt()
+                    y += dy.roundToInt()
+                }
+            },
+            modifier = androidx.compose.ui.Modifier.padding(6.dp),
+        )
     }
 
     override fun onDestroy() {
