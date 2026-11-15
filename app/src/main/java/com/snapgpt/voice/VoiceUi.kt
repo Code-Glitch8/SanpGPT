@@ -149,7 +149,8 @@ fun rememberVoiceActions(vm: VoiceInputViewModel, onCancel: () -> Unit, onSend: 
             onSend = {
                 val s = currentState
                 if (s.canSend) {
-                    val text = TranscriptBuffer.finalText(s.text)
+                    // Sending while recording uses the latest partial transcript and immediately releases the mic.
+                    val text = TranscriptBuffer.finalText(s.displayText)
                     vm.discard()
                     sendCb(text)
                 }
