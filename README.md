@@ -26,6 +26,8 @@ SnapGPT is a study and practice aid. Do not use it during proctored exams or any
 - Two-stage AI preserved: Stage 1 = JSON answers + bounding boxes only; Stage 2 = explanation only when you tap a bubble.
 - JEE modes (Automatic / Main / Advanced), syllabus restriction (default on), chapter/topic display, alternative methods.
 - Per-account usage dashboard; history with thumbnails; Light/Dark/System theme.
+- **Voice input:** tap the microphone in supported follow-up fields or the floating explanation panel, speak, edit the transcript, then send it through the existing follow-up flow. The app requests microphone permission only when you start recording and releases the recogniser when the session ends.
+- **API backup and restore:** export API configuration to an encrypted `.snapgpt` backup, then import it with a preview and Merge or Replace confirmation. An automatic encrypted local backup helps recover configuration after storage problems.
 
 ## Requirements
 - Android 8.0+ (API 26), compiled against SDK 35.
@@ -96,9 +98,9 @@ The debug APK uses the auto-generated debug keystore; **no private credentials a
 ### GitHub Actions (builds the APK for you)
 1. Create a GitHub repository and push the project (include the hidden `.github` folder and `gradle/wrapper/gradle-wrapper.jar`).
 2. Open **Actions > Build Android APK** (runs on push to `main`, pull requests and *Run workflow*).
-3. When it finishes, download the **SnapGPT-Android-APK** artifact, extract the ZIP and install `app-debug.apk` on your phone (allow "Install unknown apps").
+3. When it finishes, download the **android-debug-apk** artifact, extract the ZIP and install `app-debug.apk` on your phone (allow "Install unknown apps").
 
-One APK is produced. On failure the **SnapGPT-Android-Build-Logs** artifact holds the reports. A live run is still pending.
+One debug APK is produced. The workflow runs `assembleDebug`; automated compilation does not replace testing voice recognition, microphone permissions, overlays, or backup/restore on a physical device.
 
 ### Release signing (optional, one signed APK)
 Keep credentials **outside the repository** (`*.jks`, `*.keystore`, `keystore.properties` are git-ignored).
