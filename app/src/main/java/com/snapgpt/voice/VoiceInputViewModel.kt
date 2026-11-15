@@ -30,8 +30,8 @@ class VoiceInputViewModel(app: Application) : AndroidViewModel(app) {
     private var startedAt = 0L
 
     private val manager = SpeechRecognizerManager(app, object : SpeechRecognizerManager.Listener {
-        override fun onListening() {
-            _state.update { if (it.phase == VoicePhase.LISTENING) it.copy(onDevice = manager.usingOnDevice) else it }
+        override fun onListening(usingOnDevice: Boolean) {
+            _state.update { if (it.phase == VoicePhase.LISTENING) it.copy(onDevice = usingOnDevice) else it }
         }
 
         override fun onLevel(rmsDb: Float) {
