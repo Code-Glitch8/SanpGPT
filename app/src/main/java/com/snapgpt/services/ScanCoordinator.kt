@@ -16,6 +16,8 @@ import com.snapgpt.ai.TokenUsage
 import com.snapgpt.ai.VerificationStatus
 import com.snapgpt.capture.BitmapCodec
 import com.snapgpt.capture.ConsentActivity
+import com.snapgpt.voice.VoiceBridge
+import com.snapgpt.voice.VoiceInputActivity
 import com.snapgpt.capture.ScreenCaptureManager
 import com.snapgpt.history.LiveQuestion
 import com.snapgpt.history.LiveSession
@@ -64,7 +66,21 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
             pendingAfterConsent = null
             overlay.toast("Screen capture was not allowed, so nothing was captured.")
         }
+        // Voice text from the voice screen goes through the very same path as text typed into the panel.
+        VoiceBridge.onSend = { text -> onFollowUp(text) }
+        VoiceBridge.onClosed = { overlay.setPanelHidden(false) }
         scope.launch { container.settings.flow.collect { settings = it; overlay.applySettings(it) } }
+    }
+
+    override fun onVoiceInput() {
+        if (explainJob?.isActive == true) return
+        overlay.setPanelHidden(true)
+        try {
+            service.startActivity(Intent(service, VoiceInputActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            overlay.setPanelHidden(false)
+            overlay.toast("Voice input could not be opened.")
+        }
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -108,6 +124,8 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         pendingShot?.recycle()
         pendingShot = null
         AssistantState.consentDeniedListener = null
+        VoiceBridge.onSend = null
+        VoiceBridge.onClosed = null
         AssistantState.setProjectionReady(false)
         scope.cancel()
     }

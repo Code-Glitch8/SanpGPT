@@ -88,7 +88,7 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
     fun deleteKey(id: String) { viewModelScope.launch { c.accounts.deleteKey(id); _notice.value = "Stored key deleted." } }
-    fun deleteAllKeys() { viewModelScope.launch { c.accounts.deleteAllKeys(); _notice.value = "All stored API keys were deleted." } }
+    fun deleteAllKeys() { viewModelScope.launch { c.accounts.deleteAllKeys(); runCatching { c.backup.forgetStoredKeys() }; _notice.value = "All stored API keys were deleted." } }
     fun clearCooldown(id: String) { viewModelScope.launch { c.accounts.clearCooldown(id) } }
     fun resetStats(id: String) { viewModelScope.launch { c.accounts.resetStats(id) } }
     suspend fun maskedKey(id: String): String = c.accounts.maskedKey(id)

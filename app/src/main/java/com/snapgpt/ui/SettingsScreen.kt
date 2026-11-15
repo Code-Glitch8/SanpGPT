@@ -42,6 +42,7 @@ import com.snapgpt.jee.ExamMode
 import com.snapgpt.settings.AppSettings
 import com.snapgpt.settings.DefaultPosition
 import com.snapgpt.settings.ThemeMode
+import kotlinx.coroutines.launch
 
 private enum class Confirm { HISTORY, SCREENSHOTS, CONVERSATIONS, DELETE_KEYS }
 
@@ -57,6 +58,7 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit, onAccounts: () -> Unit
     }
 
     var confirm by remember { mutableStateOf<Confirm?>(null) }
+    val backupScope = androidx.compose.runtime.rememberCoroutineScope()
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -154,6 +156,11 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit, onAccounts: () -> Unit
             // ------------------------------------------------ H. Appearance
             SectionCard("Appearance") {
                 RadioRows(ThemeMode.entries, s.theme, { it.label }) { t -> vm.update { it.copy(theme = t) } }
+            }
+
+            // ------------------------------------------------ API backup and restore
+            SectionCard("API backup & restore") {
+                BackupSection { msg -> backupScope.launch { snackbar.showSnackbar(msg) } }
             }
 
             // ------------------------------------------------ I. Privacy

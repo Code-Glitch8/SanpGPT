@@ -9,6 +9,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- Android 13+: show the mandatory foreground-service notification. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Voice input: requested at runtime only when the user taps the microphone button; never at app start. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- Android 11+ package visibility: without this, SpeechRecognizer.isRecognitionAvailable() wrongly reports false. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:name=".SnapGptApp"
@@ -37,6 +47,16 @@
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:taskAffinity=""
+            android:theme="@style/Theme.SnapGPT.Translucent" />
+
+        <!-- Transparent voice-input screen opened from the floating assistant's explanation panel. -->
+        <activity
+            android:name=".voice.VoiceInputActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.SnapGPT.Translucent" />
 
         <service

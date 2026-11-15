@@ -11,9 +11,11 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.snapgpt.R
 import com.snapgpt.util.Screen
 
 /** Root of the panel; turns the Back key into a callback (the window only becomes focusable while typing). */
@@ -40,6 +42,7 @@ class ExplanationPanel(private val ctx: Context, private val wm: WindowManager) 
         fun onRegenerate()
         fun onDetailed()
         fun onFollowUp(text: String)
+        fun onVoice()
     }
 
     private var root: PanelRoot? = null
@@ -240,7 +243,16 @@ class ExplanationPanel(private val ctx: Context, private val wm: WindowManager) 
             isClickable = true
             setOnClickListener { submit() }
         }
+        val mic = ImageView(ctx).apply {
+            setImageResource(R.drawable.ic_mic)
+            setColorFilter(palette.primary)
+            contentDescription = "Ask by voice"
+            setPadding(dp(8f), dp(8f), dp(8f), dp(8f))
+            isClickable = true
+            setOnClickListener { if (!busy) listener?.onVoice() }
+        }
         footer.addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        footer.addView(mic, LinearLayout.LayoutParams(dp(40f), dp(40f)).apply { leftMargin = dp(4f) })
         footer.addView(ask, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8f) })
         r.addView(footer, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 

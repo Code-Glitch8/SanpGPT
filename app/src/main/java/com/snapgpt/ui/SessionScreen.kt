@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +20,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -27,6 +29,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,7 +37,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.snapgpt.container
+import com.snapgpt.voice.VoiceInputSheet
+import com.snapgpt.voice.VoiceInputViewModel
 import com.snapgpt.history.StoredQuestion
 import com.snapgpt.overlay.AnswerFormatter
 
@@ -52,6 +58,10 @@ fun SessionScreen(sessionId: Long, onBack: () -> Unit) {
     val chats by controller.chats.collectAsStateWithLifecycle()
     val busy by controller.busy.collectAsStateWithLifecycle()
     val errors by controller.errors.collectAsStateWithLifecycle()
+
+    // Voice input: the sheet is opened only by tapping a microphone button; Send goes through the same controller.ask as typed text.
+    val voiceVm: VoiceInputViewModel = viewModel()
+    var voiceFor by rememberSaveable { mutableStateOf<Long?>(null) }
 
     Scaffold(
         topBar = {
@@ -77,6 +87,7 @@ fun SessionScreen(sessionId: Long, onBack: () -> Unit) {
                         q = q, explanation = explanations[q.rowId], chat = chats[q.rowId].orEmpty(),
                         busy = q.rowId in busy, error = errors[q.rowId],
                         onExplain = { controller.explain(q) }, onAsk = { controller.ask(q, it) },
+                        onVoice = { voiceFor = q.rowId },
                     )
                 }
                 item {
@@ -88,12 +99,27 @@ fun SessionScreen(sessionId: Long, onBack: () -> Unit) {
             }
         }
     }
+
+    val target = voiceFor
+    if (target != null) {
+        VoiceInputSheet(
+            vm = voiceVm,
+            onDismiss = { voiceFor = null },
+            onSend = { text -> submitVoiceQuestion(session, controller, target, text) },
+        )
+    }
+}
+
+/** Voice text is submitted exactly like text typed into the follow-up field. */
+private fun submitVoiceQuestion(session: com.snapgpt.history.StoredSession?, controller: SessionController, rowId: Long, text: String) {
+    val q = session?.questions?.firstOrNull { it.rowId == rowId } ?: return
+    controller.ask(q, text)
 }
 
 @Composable
 private fun QuestionCard(
     q: StoredQuestion, explanation: String?, chat: List<com.snapgpt.ai.ChatMessage>, busy: Boolean, error: String?,
-    onExplain: () -> Unit, onAsk: (String) -> Unit,
+    onExplain: () -> Unit, onAsk: (String) -> Unit, onVoice: () -> Unit,
 ) {
     var ask by remember { mutableStateOf("") }
     val d = q.question
@@ -129,7 +155,16 @@ private fun QuestionCard(
                     value = ask, onValueChange = { ask = it }, modifier = Modifier.fillMaxWidth(), singleLine = true,
                     label = { Text("Ask a follow-up") },
                 )
-                Button(onClick = { onAsk(ask); ask = "" }, enabled = ask.isNotBlank() && !busy) { Text(if (busy) "Thinking…" else "Ask") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = { onAsk(ask); ask = "" }, enabled = ask.isNotBlank() && !busy) { Text(if (busy) "Thinking…" else "Ask") }
+                    TextButton(onClick = onVoice, enabled = !busy) {
+                        androidx.compose.material3.Icon(
+                            androidx.compose.ui.res.painterResource(com.snapgpt.R.drawable.ic_mic), contentDescription = null,
+                            modifier = Modifier.padding(end = 6.dp).size(18.dp),
+                        )
+                        Text("Ask by voice")
+                    }
+                }
             }
             if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
