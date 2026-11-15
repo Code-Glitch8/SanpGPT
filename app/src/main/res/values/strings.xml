@@ -10,6 +10,7 @@
     <string name="notif_action_show">Show circle</string>
     <string name="menu_scan_full">Scan entire screen</string>
     <string name="menu_select_area">Select question area</string>
+    <string name="menu_voice_ask">Ask by Voice</string>
     <string name="menu_clear_answers">Clear answers</string>
     <string name="menu_hide">Hide assistant</string>
     <string name="menu_settings">Settings</string>
