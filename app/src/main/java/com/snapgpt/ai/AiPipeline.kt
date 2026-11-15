@@ -160,7 +160,6 @@ class AiPipeline(private val failover: FailoverManager, private val verifier: An
             append("If an image is attached, it is a screenshot the user explicitly referred to; inspect it and ")
             append("follow their instruction to locate the relevant content. Do not assume every request needs an image. ")
             append("If the screenshot does not contain the requested item or it is unreadable, say so honestly.")
-            if (s.jee.mode.enabled) append("\\n\\n").append(Prompts.stage2System(s.jee, true))
         }
         val routed = failover.route(
             RouteSpec(RequestKind.FOLLOW_UP, needsImage = image != null, config = s.failover) { a ->
