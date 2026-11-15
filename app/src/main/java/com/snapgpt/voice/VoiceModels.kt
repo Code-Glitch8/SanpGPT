@@ -47,7 +47,7 @@ data class VoiceUiState(
     val isBusy: Boolean get() = phase == VoicePhase.LISTENING || phase == VoicePhase.PROCESSING
 
     /** Send is only possible when nothing is being recorded and the transcript contains something to ask. */
-    val canSend: Boolean get() = !isBusy && TranscriptBuffer.isUsable(text)
+    val canSend: Boolean get() = TranscriptBuffer.isUsable(displayText)
 
     /** What the transcript field shows: the committed text plus the live partial while listening. */
     val displayText: String get() = if (isListening || phase == VoicePhase.PROCESSING) TranscriptBuffer.append(text, partial) else text
