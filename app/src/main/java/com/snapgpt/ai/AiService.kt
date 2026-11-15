@@ -50,4 +50,17 @@ class AiService(
         val s = settings.current()
         return pipeline.followUp(q, explanation, history, ask, crop?.let { { encode(it) } }, s.toPipelineSettings(), onStatus)
     }
+
+    /** General assistant request. [screenshot] is null for voice-only questions. */
+    suspend fun ask(
+        prompt: String,
+        screenshot: Bitmap?,
+        history: List<ChatMessage>,
+        onStatus: (String) -> Unit,
+    ): TextOutcome {
+        val s = settings.current().toPipelineSettings()
+        val image = screenshot?.let { encode(it) }
+        return pipeline.ask(prompt, image, history, s, onStatus)
+    }
+
 }
