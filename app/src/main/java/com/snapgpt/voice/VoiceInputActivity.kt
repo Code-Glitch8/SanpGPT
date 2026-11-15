@@ -36,7 +36,16 @@ object VoiceBridge {
 
     /** Called whenever the voice screen closes (sent, cancelled or dismissed) so the floating panel can reappear. */
     @Volatile
+    var onAsk: ((String) -> Unit)? = null
+
+    @Volatile
     var onClosed: (() -> Unit)? = null
+
+    internal fun ask(text: String): Boolean {
+        val cb = onAsk ?: return false
+        cb(text)
+        return true
+    }
 
     internal fun send(text: String): Boolean {
         val cb = onSend ?: return false
@@ -53,6 +62,10 @@ object VoiceBridge {
  * follow-up path as typed text; Cancel or tapping outside discards it and frees the microphone.
  */
 class VoiceInputActivity : ComponentActivity() {
+    companion object {
+        const val EXTRA_VOICE_ASK = "com.snapgpt.voice.EXTRA_VOICE_ASK"
+    }
+
     private val vm: VoiceInputViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,7 +84,12 @@ class VoiceInputActivity : ComponentActivity() {
             vm,
             onCancel = { finish() },
             onSend = { text ->
-                if (!VoiceBridge.send(text)) {
+                val delivered = if (intent.getBooleanExtra(EXTRA_VOICE_ASK, false)) {
+                    VoiceBridge.ask(text)
+                } else {
+                    VoiceBridge.send(text)
+                }
+                if (!delivered) {
                     android.widget.Toast.makeText(this, "The SnapGPT assistant is not running.", android.widget.Toast.LENGTH_SHORT).show()
                 }
                 finish()

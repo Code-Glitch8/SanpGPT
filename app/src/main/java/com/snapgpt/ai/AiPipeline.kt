@@ -142,4 +142,38 @@ class AiPipeline(private val failover: FailoverManager, private val verifier: An
         ) { it }
         return TextOutcome(TextSimplifier.simplify(routed.result.text), routed.result.usage, routed.account.name)
     }
+
+    /**
+     * General voice request. Text-only requests never attach or capture an image. A screenshot is attached
+     * only when the caller explicitly supplies one after detecting a screen-context phrase.
+     */
+    suspend fun ask(
+        prompt: String,
+        image: EncodedImage?,
+        history: List<ChatMessage>,
+        s: PipelineSettings,
+        onStatus: (String) -> Unit = {},
+    ): TextOutcome {
+        val system = buildString {
+            append("You are SnapGPT, a helpful assistant. Answer the user's request clearly and directly. ")
+            append("The request may be a question, a request to explain a concept, or another instruction. ")
+            append("If an image is attached, it is a screenshot the user explicitly referred to; inspect it and ")
+            append("follow their instruction to locate the relevant content. Do not assume every request needs an image. ")
+            append("If the screenshot does not contain the requested item or it is unreadable, say so honestly.")
+        }
+        val routed = failover.route(
+            RouteSpec(RequestKind.FOLLOW_UP, needsImage = image != null, config = s.failover) { a ->
+                val attach = image != null && a.supportsImages()
+                val messages = buildList {
+                    add(ChatMessage("system", system))
+                    addAll(history.takeLast(10))
+                    add(ChatMessage("user", prompt, if (attach) listOf(image!!.dataUrl) else emptyList()))
+                }
+                ChatRequest(a.model, messages, 0.6, AiDefaults.STAGE2_MAX_COMPLETION_TOKENS, jsonMode = false)
+            },
+            onStatus,
+        ) { it }
+        return TextOutcome(TextSimplifier.simplify(routed.result.text), routed.result.usage, routed.account.name)
+    }
+
 }
