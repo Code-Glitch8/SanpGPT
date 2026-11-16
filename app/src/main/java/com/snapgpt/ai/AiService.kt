@@ -51,6 +51,12 @@ class AiService(
         return pipeline.followUp(q, explanation, history, ask, crop?.let { { encode(it) } }, s.toPipelineSettings(), onStatus)
     }
 
+    /** Cleans recognised speech before the main assistant request. */
+    suspend fun cleanVoiceTranscript(text: String, onStatus: (String) -> Unit = {}): TextOutcome {
+        val s = settings.current().toPipelineSettings()
+        return pipeline.cleanVoiceTranscript(text, s, onStatus)
+    }
+
     /** General assistant request. [screenshot] is null for voice-only questions. */
     suspend fun ask(
         prompt: String,
