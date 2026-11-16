@@ -107,8 +107,11 @@ object WaveformLevels {
     }
 
     /** Always returns a full-width waveform, including before the first microphone callback. */
-    fun padded(levels: List<Float>, size: Int = BAR_COUNT): List<Float> =
-        if (levels.size == size) levels else List(size) { index -> levels.getOrNull(index) ?: 0f }
+    fun padded(levels: List<Float>, size: Int = BAR_COUNT): List<Float> {
+        val visible = levels.takeLast(size)
+        val start = (size - visible.size) / 2
+        return List(size) { index -> visible.getOrNull(index - start) ?: 0f }
+    }
 }
 
 object VoiceTime {
