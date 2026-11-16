@@ -69,15 +69,20 @@ class VoiceLogicTest {
         assertTrue(WaveformLevels.normalize(3f) > WaveformLevels.normalize(0f))
     }
 
-    @Test fun levelsKeepOnlyTheNewestBarsAndPadWithSilence() {
-        var l = emptyList<Float>()
-        repeat(50) { l = WaveformLevels.push(l, it / 50f) }
-        assertEquals(WaveformLevels.BAR_COUNT, l.size)
-        assertEquals(49 / 50f, l.last(), 0.0001f)
+    @Test fun waveformBarsStayFixedAndGrowSymmetricallyFromTheCentre() {
+        val quiet = WaveformLevels.push(emptyList(), 0.25f)
+        val loud = WaveformLevels.push(quiet, 0.9f)
+        assertEquals(WaveformLevels.BAR_COUNT, loud.size)
+        assertEquals(loud.first(), loud.last(), 0f)
+        assertEquals(loud[1], loud[loud.lastIndex - 1], 0f)
+        assertTrue(loud[loud.size / 2] >= loud[0])
+        assertTrue(loud[loud.size / 2] > quiet[quiet.size / 2])
+        assertTrue(loud.count { it > 0f } >= quiet.count { it > 0f })
         val p = WaveformLevels.padded(listOf(0.5f, 0.6f))
         assertEquals(WaveformLevels.BAR_COUNT, p.size)
-        assertEquals(0f, p.first(), 0f)
-        assertEquals(0.6f, p.last(), 0f)
+        assertEquals(p[0], p.last(), 0f)
+        assertEquals(0.5f, p[15], 0f)
+        assertEquals(0.6f, p[16], 0f)
     }
 
     // ---------------------------------------------------------------- timer
