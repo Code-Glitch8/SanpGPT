@@ -1,5 +1,7 @@
 package com.snapgpt.voice
 
+import kotlin.math.abs
+
 /** Where the voice panel is in its life cycle. */
 enum class VoicePhase { IDLE, LISTENING, PROCESSING, REVIEW, ERROR }
 
@@ -37,7 +39,7 @@ data class VoiceUiState(
     val text: String = "",
     val partial: String = "",
     val elapsedMs: Long = 0L,
-    /** Newest level last, each 0..1, at most [WaveformLevels.BAR_COUNT] entries. Measured from the real microphone signal. */
+    /** Fixed-position, centre-out bar amplitudes (0..1), mirrored around the waveform centre. */
     val levels: List<Float> = emptyList(),
     val error: VoiceError? = null,
     /** True when the on-device recogniser is in use, false for the default (possibly network-backed) one, null before any session. */
@@ -90,14 +92,23 @@ object WaveformLevels {
         return if (n < NOISE_GATE) 0f else n
     }
 
-    fun push(levels: List<Float>, level: Float, size: Int = BAR_COUNT): List<Float> =
-        (levels + level.coerceIn(0f, 1f)).takeLast(size)
-
-    /** Always [size] values for drawing: missing history on the left is padded with silence. */
-    fun padded(levels: List<Float>, size: Int = BAR_COUNT): List<Float> {
-        val tail = levels.takeLast(size)
-        return List(size - tail.size) { 0f } + tail
+    /** Stationary symmetric bars activate progressively from the centre towards both edges. */
+    @Suppress("UNUSED_PARAMETER")
+    fun push(levels: List<Float>, level: Float, size: Int = BAR_COUNT): List<Float> {
+        val amplitude = level.coerceIn(0f, 1f)
+        if (size <= 0) return emptyList()
+        val centre = (size - 1) / 2f
+        val maxDistance = (centre + 0.5f).coerceAtLeast(0.5f)
+        return List(size) { index ->
+            val distance = (abs(index - centre) / maxDistance).coerceIn(0f, 1f)
+            val threshold = distance * 0.78f
+            ((amplitude - threshold) / (1f - threshold)).coerceIn(0f, 1f)
+        }
     }
+
+    /** Always returns a full-width waveform, including before the first microphone callback. */
+    fun padded(levels: List<Float>, size: Int = BAR_COUNT): List<Float> =
+        if (levels.size == size) levels else List(size) { index -> levels.getOrNull(index) ?: 0f }
 }
 
 object VoiceTime {
