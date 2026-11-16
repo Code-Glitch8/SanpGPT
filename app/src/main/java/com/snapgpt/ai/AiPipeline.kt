@@ -45,6 +45,8 @@ data class AnalysisOutcome(
 
 data class TextOutcome(val text: String, val usage: TokenUsage?, val accountName: String)
 
+private object TranscriptBufferLimit { const val MAX_CHARS = 4000 }
+
 /**
  * Two-stage pipeline on top of the failover manager.
  *  Stage 1: one image request -> concise JSON answers (never explanations), then independent verification.
@@ -141,6 +143,29 @@ class AiPipeline(private val failover: FailoverManager, private val verifier: An
             onStatus,
         ) { it }
         return TextOutcome(TextSimplifier.simplify(routed.result.text), routed.result.usage, routed.account.name)
+    }
+
+    /**
+     * AI-assisted dictation cleanup. Preserve meaning, names, numbers, equations and technical vocabulary.
+     */
+    suspend fun cleanVoiceTranscript(
+        transcript: String,
+        s: PipelineSettings,
+        onStatus: (String) -> Unit = {},
+    ): TextOutcome {
+        val system = "You clean speech-to-text transcripts for an assistant. Correct spelling, punctuation, capitalization and grammar; remove obvious filler words and accidental repeated words. Preserve the speaker's exact meaning, intent, names, numbers, equations, code, and technical terms. Do not answer the request, add facts, summarize, or change its tone. Return only the cleaned transcript, with no quotation marks or commentary. If uncertain, keep the original wording."
+        val routed = failover.route(
+            RouteSpec(RequestKind.FOLLOW_UP, needsImage = false, config = s.failover) { a ->
+                ChatRequest(
+                    a.model,
+                    listOf(ChatMessage("system", system), ChatMessage("user", transcript.take(TranscriptBufferLimit.MAX_CHARS))),
+                    0.1, 500, jsonMode = false,
+                )
+            },
+            onStatus,
+        ) { it }
+        val cleaned = routed.result.text.trim().removeSurrounding("\"").trim()
+        return TextOutcome(cleaned.ifBlank { transcript.trim() }, routed.result.usage, routed.account.name)
     }
 
     /**
