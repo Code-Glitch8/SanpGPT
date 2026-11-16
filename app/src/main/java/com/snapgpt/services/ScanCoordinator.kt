@@ -93,32 +93,53 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
         }
     }
 
-    /** A screenshot is used only when the spoken request explicitly points to visible screen content. */
+    /** Detect natural references to content currently visible on the device. */
     private fun requiresScreenContext(text: String): Boolean {
-        val t = text.lowercase()
-        return Regex("\\b(on|in|from|about|of|at)\\s+(my|the|this)?\\s*screen\\b").containsMatchIn(t) ||
-            Regex("\\bmy screen\\b|\\bthis page\\b|\\bcurrent page\\b|\\bshown here\\b|\\bvisible here\\b").containsMatchIn(t)
+        val t = text.lowercase().replace(Regex("\\s+"), " ").trim()
+        val patterns = listOf(
+            "\\b(on|in|from|about|of|at|shown on|visible on)\\s+(my|the|this|that)?\\s*(screen|display)\\b",
+            "\\b(this|that|the current|current)\\s+(page|tab|website|webpage|window|app|screen)\\b",
+            "\\b(my|this|the)\\s+(screen|display|page|tab|window)\\b",
+            "\\b(what|everything|the content)\\s+(is|are)?\\s*(shown|displayed|visible)\\b",
+            "\\b(what am i|what are we) looking at\\b",
+            "\\b(what|the topic|the text|the content)\\s+.*\\b(on|in)\\s+(my|the|this|that)?\\s*(screen|page|tab)\\b",
+            "\\b(currently|right now)\\s+(looking at|viewing|reading)\\b",
+            "\\b(read|explain|describe|summarize|summarise|translate|solve)\\s+(what'?s|what is|the content|everything|the text)\\s+(shown|displayed|visible)\\b",
+        )
+        return patterns.any { Regex(it).containsMatchIn(t) }
     }
 
-    /** General voice chat: no image is captured unless the user explicitly refers to their screen or current page. */
+    /** General voice chat. Screen-referencing requests capture one clean frame and attach it with the cleaned prompt. */
     private fun onVoiceAsk(text: String) {
-        val request = text.trim()
-        if (request.isEmpty() || explainJob?.isActive == true) return
+        val rawRequest = text.trim()
+        if (rawRequest.isEmpty() || explainJob?.isActive == true) return
+        val needsScreen = requiresScreenContext(rawRequest)
+        if (needsScreen && !capture.isReady) {
+            overlay.setPanelBusy(false)
+            overlay.setPanelBody("Allow screen capture to let SnapGPT see the page you're referring to. Your request will continue automatically after permission is granted.")
+            requestConsent { onVoiceAsk(rawRequest) }
+            return
+        }
         activeQuestionId = null
         overlay.showPanel("Voice request")
         overlay.setPanelVerification(null, false)
         overlay.setPanelDetailedAvailable(false)
         overlay.setPanelBusy(true)
-        overlay.setPanelBody("Processing your request…")
-        val needsScreen = requiresScreenContext(request)
+        overlay.setPanelBody("Cleaning up your voice request…")
         voiceCaptureInProgress = needsScreen
         explainJob = scope.launch {
             var screenshot: Bitmap? = null
             try {
+                val request = try {
+                    container.ai.cleanVoiceTranscript(rawRequest) { overlay.showStatus("Cleaning up transcript…") }
+                        .text.trim().ifBlank { rawRequest }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    rawRequest
+                }
                 if (needsScreen) {
-                    if (!capture.isReady) {
-                        throw AiException(AiErrorCode.NOT_READY, "Screen capture is not active. Start the assistant's screen-capture session before asking about your screen.")
-                    }
+                    overlay.showStatus("Capturing the screen…")
                     screenshot = grabCleanScreenshot(keepPanelHidden = true)
                     if (BitmapCodec.looksBlank(screenshot!!)) {
                         throw AiException(AiErrorCode.CAPTURE, "The screen capture was blank or blocked by the app in front. Nothing was sent.")
@@ -133,14 +154,14 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
                     voiceChatHistory.forEachIndexed { index, message ->
                         if (index % 2 == 0) append("**You:** ").append(message.text)
                         else append(message.text)
-                        append("\n\n")
+                        append("\\n\\n")
                     }
                 }.trim(), scrollToEnd = true)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AiException) {
                 overlay.hideStatus()
-                overlay.setPanelBody("Could not answer your request.\n\n${e.message}")
+                overlay.setPanelBody("Could not answer your request.\\n\\n${e.message}")
             } catch (e: Exception) {
                 overlay.hideStatus()
                 overlay.setPanelBody("Could not answer your request (${e.javaClass.simpleName}). Please try again.")
