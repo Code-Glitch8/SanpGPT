@@ -154,14 +154,14 @@ class ScanCoordinator(private val service: Context, private val container: AppCo
                     voiceChatHistory.forEachIndexed { index, message ->
                         if (index % 2 == 0) append("**You:** ").append(message.text)
                         else append(message.text)
-                        append("\\n\\n")
+                        append("\n\n")
                     }
                 }.trim(), scrollToEnd = true)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AiException) {
                 overlay.hideStatus()
-                overlay.setPanelBody("Could not answer your request.\\n\\n${e.message}")
+                overlay.setPanelBody("Could not answer your request.\n\n${e.message}")
             } catch (e: Exception) {
                 overlay.hideStatus()
                 overlay.setPanelBody("Could not answer your request (${e.javaClass.simpleName}). Please try again.")
